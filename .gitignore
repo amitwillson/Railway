@@ -42,3 +42,7 @@ Thumbs.db
 coverage/
 .cache/
 tmp/
+
+# demo build intermediates (the single HTML file itself is committed)
+web/dist-demo/
+web/src/demo/data.json

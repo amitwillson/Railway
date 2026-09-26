@@ -8,7 +8,9 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "build:demo": "DEMO=1 vite build",
+    "demo:data": "node scripts/make-demo-data.mjs"
   },
   "dependencies": {
     "react": "^18.3.1",

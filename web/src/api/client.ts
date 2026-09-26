@@ -1,3 +1,5 @@
+import { assetUrl, transport } from './transport';
+
 const TOKEN_KEY = 'ri.token';
 const BASE = '/api';
 
@@ -77,7 +79,7 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
 
   let response: Response;
   try {
-    response = await fetch(BASE + path + toQuery(params), { method, headers, body: payload, signal });
+    response = await transport(BASE + path + toQuery(params), { method, headers, body: payload, signal });
   } catch (err) {
     if ((err as Error)?.name === 'AbortError') throw err;
     throw new ApiError(0, 'OFFLINE', 'No connection to the server. Your work is saved on this device.');
@@ -129,7 +131,9 @@ export function reportUrl(path: string, params?: Record<string, QueryValue>): st
   return BASE + path + query;
 }
 
-/** URL of a stored evidence file. */
+/** URL of a stored evidence file - an embedded data URL in the demo build. */
 export function fileUrl(storedName: string, download = false): string {
+  const embedded = assetUrl(storedName);
+  if (embedded) return embedded;
   return `${BASE}/files/${storedName}${toQuery({ access_token: getToken(), download: download ? 1 : undefined })}`;
 }

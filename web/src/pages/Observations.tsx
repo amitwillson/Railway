@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { api, reportUrl } from '../api/client';
+import { exportReport } from '../api/transport';
 import { useAuth } from '../state/AuthContext';
 import ObservationCard from '../components/ObservationCard';
 import Icon from '../components/Icon';
@@ -215,12 +216,18 @@ export default function Observations() {
 
       {page && page.data.length > 0 && (
         <div className="center">
-          <a
-            className="btn btn--ghost btn--sm"
-            href={reportUrl('/reports/observations', { ...query, format: 'xlsx' })}
-          >
-            <Icon name="download" size={14} /> Export this view to Excel
-          </a>
+          {exportReport ? (
+            <Button size="sm" variant="ghost" icon="download" onClick={() => exportReport?.('/reports/observations', query)}>
+              Export this view to CSV
+            </Button>
+          ) : (
+            <a
+              className="btn btn--ghost btn--sm"
+              href={reportUrl('/reports/observations', { ...query, format: 'xlsx' })}
+            >
+              <Icon name="download" size={14} /> Export this view to Excel
+            </a>
+          )}
         </div>
       )}
     </div>

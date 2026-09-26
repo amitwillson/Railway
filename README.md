@@ -52,6 +52,17 @@ npm run build               # builds the web client into web/dist
 npm start                   # the API serves the API and the built client on :4000
 ```
 
+### Try it without installing anything
+
+[`demo/railway-inspection-demo.html`](demo/railway-inspection-demo.html) is the whole application in
+a single file &mdash; open it in a browser and it runs with no server and no network. The workflow,
+assignment, repeat detection, dashboards and CSV export are all live; see
+[`demo/README.md`](demo/README.md) for a walkthrough and for what needs the server.
+
+```bash
+npm run build:demo        # rebuild it from the current seed
+```
+
 ### Tests
 
 ```bash

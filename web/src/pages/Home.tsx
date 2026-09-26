@@ -2,8 +2,9 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '../api/client';
 import { useAuth } from '../state/AuthContext';
+import { IS_DEMO } from '../api/transport';
 import Icon, { type IconName } from '../components/Icon';
-import { Badge, Card, EmptyState, Skeletons, StatTile, StatusBadge } from '../components/ui';
+import { Badge, Banner, Card, EmptyState, Skeletons, StatTile, StatusBadge } from '../components/ui';
 import { moduleTone, number, relativeTime } from '../lib/format';
 import type { Module, ObservationStatus } from '../api/types';
 
@@ -43,7 +44,7 @@ export default function Home() {
     <div className="stack" style={{ '--gap': '16px' } as React.CSSProperties}>
       <div className="page-head">
         <h1>
-          {greeting()}, {user?.name?.split(' ')[0] ?? 'Officer'}
+          {greeting()}, {firstName(user?.name)}
         </h1>
         <p>
           {user?.designation}
@@ -51,6 +52,15 @@ export default function Home() {
           {user?.division_name ? ` · ${user.division_name} Division` : ''}
         </p>
       </div>
+
+      {IS_DEMO && (
+        <Banner tone="info" icon="info">
+          <strong>Offline demonstration build.</strong> The whole application, including its data, is inside this one
+          file - nothing is sent anywhere and no server is involved. Everything you record is real while the page is
+          open; reloading restores the original demonstration data. Server-generated PDF and Excel reports, email and
+          SMS delivery are the only parts that cannot run here.
+        </Banner>
+      )}
 
       {/* The three inspection streams */}
       <div className="grid grid--3">
@@ -176,6 +186,13 @@ export default function Home() {
       </Card>
     </div>
   );
+}
+
+/** "R. K. Sharma" has no usable first name, so fall back to the full name. */
+function firstName(name?: string | null): string {
+  if (!name) return 'Officer';
+  const first = name.trim().split(/\s+/)[0] ?? '';
+  return first.length <= 2 || first.endsWith('.') ? name : first;
 }
 
 function greeting(): string {

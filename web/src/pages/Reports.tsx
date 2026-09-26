@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
 import { api, reportUrl } from '../api/client';
+import { exportReport } from '../api/transport';
 import { useAuth } from '../state/AuthContext';
 import Icon from '../components/Icon';
-import { Badge, Button, Card, Field, Loading, SearchSelect } from '../components/ui';
+import { Badge, Banner, Button, Card, Field, Loading, SearchSelect } from '../components/ui';
 import { todayIso, addDays } from '../lib/format';
 import type { Station } from '../api/types';
 
@@ -101,6 +102,14 @@ export default function Reports() {
         </div>
       </Card>
 
+      {exportReport && (
+        <Banner tone="info">
+          This is the offline demonstration build. Reports can be previewed and exported as CSV from the data in this
+          file; the PDF and Excel versions - with photographs, signatures and the verification QR code - are produced
+          by the server in the deployed application.
+        </Banner>
+      )}
+
       <div className="grid grid--wide">
         {catalogue.map((entry) => (
           <Card key={entry.key} title={entry.name} subtitle={entry.description} icon="file">
@@ -111,17 +120,28 @@ export default function Reports() {
               </p>
             ) : (
               <div className="row row--wrap" style={{ gap: 8 }}>
-                {FORMATS.map((format) => (
-                  <a
-                    key={format.key}
-                    className="btn btn--ghost btn--sm"
-                    href={reportUrl(`/reports/${entry.key}`, { ...params, format: format.key })}
-                    target={format.key === 'pdf' ? '_blank' : undefined}
-                    rel="noreferrer"
+                {exportReport ? (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    icon="download"
+                    onClick={() => exportReport?.(`/reports/${entry.key}`, params)}
                   >
-                    <Icon name={format.icon} size={14} /> {format.label}
-                  </a>
-                ))}
+                    CSV
+                  </Button>
+                ) : (
+                  FORMATS.map((format) => (
+                    <a
+                      key={format.key}
+                      className="btn btn--ghost btn--sm"
+                      href={reportUrl(`/reports/${entry.key}`, { ...params, format: format.key })}
+                      target={format.key === 'pdf' ? '_blank' : undefined}
+                      rel="noreferrer"
+                    >
+                      <Icon name={format.icon} size={14} /> {format.label}
+                    </a>
+                  ))
+                )}
                 <Button
                   size="sm"
                   variant="quiet"
@@ -139,12 +159,20 @@ export default function Reports() {
       {can('admin', 'divisional_officer') && (
         <Card title="Audit trail export" subtitle="User, date, time, action, previous value and new value" icon="shield">
           <div className="row row--wrap" style={{ gap: 8 }}>
-            <a className="btn btn--ghost btn--sm" href={reportUrl('/reports/audit', { ...params, format: 'xlsx' })}>
-              <Icon name="download" size={14} /> Excel
-            </a>
-            <a className="btn btn--ghost btn--sm" href={reportUrl('/reports/audit', { ...params, format: 'csv' })}>
-              <Icon name="download" size={14} /> CSV
-            </a>
+            {exportReport ? (
+              <Button size="sm" variant="ghost" icon="download" onClick={() => exportReport?.('/reports/audit', params)}>
+                CSV
+              </Button>
+            ) : (
+              <>
+                <a className="btn btn--ghost btn--sm" href={reportUrl('/reports/audit', { ...params, format: 'xlsx' })}>
+                  <Icon name="download" size={14} /> Excel
+                </a>
+                <a className="btn btn--ghost btn--sm" href={reportUrl('/reports/audit', { ...params, format: 'csv' })}>
+                  <Icon name="download" size={14} /> CSV
+                </a>
+              </>
+            )}
           </div>
         </Card>
       )}

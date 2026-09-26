@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { api, reportUrl } from '../api/client';
+import { exportReport } from '../api/transport';
 import Icon from '../components/Icon';
 import ObservationCard from '../components/ObservationCard';
 import { Badge, Card, EmptyState, Loading, StatTile, Tabs } from '../components/ui';
@@ -65,9 +66,15 @@ export default function StationDetail() {
       <div className="row" style={{ gap: 8 }}>
         <Link to="/stations" className="btn btn--ghost btn--sm"><Icon name="chevron-left" size={14} /> Stations</Link>
         <span className="spacer" />
-        <a className="btn btn--ghost btn--sm" href={reportUrl('/reports/station-wise', { station_id: s.id, format: 'pdf' })} target="_blank" rel="noreferrer">
-          <Icon name="download" size={14} /> Station report
-        </a>
+        {exportReport ? (
+          <button className="btn btn--ghost btn--sm" onClick={() => exportReport?.('/reports/observations', { station_id: s.id })}>
+            <Icon name="download" size={14} /> Station report (CSV)
+          </button>
+        ) : (
+          <a className="btn btn--ghost btn--sm" href={reportUrl('/reports/station-wise', { station_id: s.id, format: 'pdf' })} target="_blank" rel="noreferrer">
+            <Icon name="download" size={14} /> Station report
+          </a>
+        )}
       </div>
 
       <Card pad>

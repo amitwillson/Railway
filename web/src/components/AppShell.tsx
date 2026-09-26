@@ -2,6 +2,7 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { Link, NavLink, useLocation, useNavigate } from 'react-router-dom';
 import Icon, { type IconName } from './Icon';
 import { useAuth } from '../state/AuthContext';
+import { IS_DEMO } from '../api/transport';
 import { useOffline } from '../state/OfflineContext';
 import { titleCase } from '../lib/format';
 
@@ -121,7 +122,20 @@ export function AppShell({ children }: { children: ReactNode }) {
         <Link to="/" className="topbar__brand" style={{ color: 'inherit', textDecoration: 'none' }}>
           <span className="topbar__mark"><Icon name="train" size={18} /></span>
           <span style={{ minWidth: 0 }}>
-            <span className="topbar__title">Railway Inspection</span>
+            <span className="topbar__title">
+              Railway Inspection
+              {IS_DEMO && (
+                <span
+                  style={{
+                    marginLeft: 6, padding: '1px 6px', borderRadius: 999,
+                    background: 'rgba(255,255,255,0.18)', fontSize: '0.62rem',
+                    fontWeight: 700, letterSpacing: '0.04em', verticalAlign: 'middle',
+                  }}
+                >
+                  DEMO
+                </span>
+              )}
+            </span>
             <span className="topbar__sub" style={{ display: 'block' }}>
               {user ? `${user.name} · ${titleCase(user.role)}` : 'Commercial Department'}
             </span>

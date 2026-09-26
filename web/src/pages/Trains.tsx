@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { api, reportUrl } from '../api/client';
+import { exportReport } from '../api/transport';
 import Icon from '../components/Icon';
 import ObservationCard from '../components/ObservationCard';
 import { Badge, Card, EmptyState, Loading, StatTile } from '../components/ui';
@@ -101,9 +102,15 @@ export function TrainDetail() {
       <div className="row" style={{ gap: 8 }}>
         <Link to="/trains" className="btn btn--ghost btn--sm"><Icon name="chevron-left" size={14} /> Trains</Link>
         <span className="spacer" />
-        <a className="btn btn--ghost btn--sm" href={reportUrl('/reports/observations', { train_id: t.id, format: 'xlsx' })}>
-          <Icon name="download" size={14} /> Export
-        </a>
+        {exportReport ? (
+          <button className="btn btn--ghost btn--sm" onClick={() => exportReport?.('/reports/observations', { train_id: t.id })}>
+            <Icon name="download" size={14} /> Export CSV
+          </button>
+        ) : (
+          <a className="btn btn--ghost btn--sm" href={reportUrl('/reports/observations', { train_id: t.id, format: 'xlsx' })}>
+            <Icon name="download" size={14} /> Export
+          </a>
+        )}
       </div>
 
       <Card pad>

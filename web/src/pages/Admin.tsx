@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { api, ApiError, reportUrl } from '../api/client';
+import { exportReport } from '../api/transport';
 import { useAuth } from '../state/AuthContext';
 import { useToast } from '../state/ToastContext';
 import Icon from '../components/Icon';
@@ -577,9 +578,15 @@ function Audit() {
             {actions.map((a) => <option key={a} value={a}>{titleCase(a)}</option>)}
           </select>
         </div>
-        <a className="btn btn--ghost" href={reportUrl('/reports/audit', { format: 'xlsx', limit: 5000 })}>
-          <Icon name="download" size={15} /> Export
-        </a>
+        {exportReport ? (
+          <Button variant="ghost" icon="download" onClick={() => exportReport?.('/reports/audit', { limit: 5000 })}>
+            Export
+          </Button>
+        ) : (
+          <a className="btn btn--ghost" href={reportUrl('/reports/audit', { format: 'xlsx', limit: 5000 })}>
+            <Icon name="download" size={15} /> Export
+          </a>
+        )}
       </div>
 
       <Card pad={false}>

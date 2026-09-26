@@ -1,7 +1,7 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
-import { BrowserRouter } from 'react-router-dom';
 import App from './App';
+import { AppRouter } from './api/transport';
 import { AuthProvider } from './state/AuthContext';
 import { OfflineProvider } from './state/OfflineContext';
 import { ToastProvider } from './state/ToastContext';
@@ -12,7 +12,7 @@ if (!root) throw new Error('Root element is missing');
 
 createRoot(root).render(
   <StrictMode>
-    <BrowserRouter>
+    <AppRouter>
       <ToastProvider>
         <AuthProvider>
           <OfflineProvider>
@@ -20,7 +20,7 @@ createRoot(root).render(
           </OfflineProvider>
         </AuthProvider>
       </ToastProvider>
-    </BrowserRouter>
+    </AppRouter>
   </StrictMode>
 );
 
