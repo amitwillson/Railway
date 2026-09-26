@@ -117,7 +117,8 @@ const RESOURCES = {
   },
 };
 
-router.get('/resources', requireRole(ROLES.ADMIN), (_req, res) => {
+/** Divisional officers may browse the masters; only admins may change them. */
+router.get('/resources', requireRole(ROLES.ADMIN, ROLES.OFFICER), (_req, res) => {
   res.json({
     data: Object.entries(RESOURCES).map(([key, def]) => ({
       key,

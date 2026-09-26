@@ -1,0 +1,25 @@
+{
+  "name": "Railway Inspection & Compliance Management",
+  "short_name": "Rail Inspect",
+  "description": "Passenger Amenities, Commercial Inspection and Safe Running - Commercial inspections, with offline capture and time-bound compliance tracking.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#f3f6f8",
+  "theme_color": "#0b4f6c",
+  "lang": "en-IN",
+  "categories": ["productivity", "business", "utilities"],
+  "icons": [
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" },
+    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml" }
+  ],
+  "shortcuts": [
+    { "name": "New Inspection", "short_name": "Inspect", "url": "/inspections/new" },
+    { "name": "Pending Observations", "short_name": "Pending", "url": "/observations?open=1" },
+    { "name": "Compliance", "short_name": "Compliance", "url": "/compliance" },
+    { "name": "Dashboard", "short_name": "Dashboard", "url": "/dashboard" }
+  ]
+}
