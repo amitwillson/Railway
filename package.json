@@ -1,0 +1,26 @@
+{
+  "name": "railway-inspection-suite",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Railway Commercial, Passenger Amenities & Safe Running Inspection & Compliance Management System",
+  "workspaces": [
+    "server",
+    "web"
+  ],
+  "engines": {
+    "node": ">=20.11"
+  },
+  "scripts": {
+    "install:all": "npm install",
+    "seed": "npm run seed --workspace server",
+    "dev": "concurrently -n api,web -c cyan,magenta \"npm:dev:server\" \"npm:dev:web\"",
+    "dev:server": "npm run dev --workspace server",
+    "dev:web": "npm run dev --workspace web",
+    "build": "npm run build --workspace web",
+    "start": "npm run start --workspace server",
+    "test": "npm test --workspace server"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.0"
+  }
+}
