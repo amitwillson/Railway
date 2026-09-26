@@ -55,9 +55,21 @@ export const optionalIsoDate = z
   .preprocess((v) => (v === '' || v === 'null' || v === null ? undefined : v), isoDate)
   .optional();
 
-export const boolish = z.preprocess(
-  (v) => (typeof v === 'string' ? ['1', 'true', 'yes', 'on'].includes(v.toLowerCase()) : v),
-  z.boolean()
-);
+/**
+ * Query-string booleans. `z.coerce.boolean()` is wrong here: it applies
+ * JavaScript truthiness, so the string "false" would become true. This maps the
+ * usual textual forms and treats anything else as absent.
+ */
+export const boolish = z.preprocess((v) => {
+  if (typeof v === 'boolean') return v;
+  if (typeof v === 'number') return v !== 0;
+  if (typeof v !== 'string') return undefined;
+  const s = v.trim().toLowerCase();
+  if (['1', 'true', 'yes', 'on'].includes(s)) return true;
+  if (['0', 'false', 'no', 'off', ''].includes(s)) return false;
+  return undefined;
+}, z.boolean());
+
+export const optionalBool = boolish.optional();
 
 export { z };

@@ -1,7 +1,7 @@
 import express from 'express';
 import { all, get } from '../db/index.js';
 import { authenticate, requireCapability } from '../middleware/auth.js';
-import { query, z, optionalId, optionalText } from '../lib/validate.js';
+import { query, z, optionalId, optionalText, optionalBool } from '../lib/validate.js';
 import { listObservations } from '../lib/queries.js';
 
 const router = express.Router();
@@ -14,7 +14,7 @@ router.get(
   query(
     z.object({
       status: optionalText,
-      overdue: z.coerce.boolean().optional(),
+      overdue: optionalBool,
       station_id: optionalId,
       module_id: optionalId,
       q: optionalText,
@@ -58,7 +58,7 @@ router.get(
   '/awaiting-verification',
   query(
     z.object({
-      mine: z.coerce.boolean().default(true),
+      mine: optionalBool.default(true),
       page: z.coerce.number().int().min(1).default(1),
       page_size: z.coerce.number().int().min(1).max(100).default(25),
       q: optionalText,

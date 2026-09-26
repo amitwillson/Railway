@@ -5,7 +5,7 @@ import { audit } from '../lib/audit.js';
 import { badRequest, forbidden, notFound } from '../lib/errors.js';
 import { authenticate, requireRole, ROLES } from '../middleware/auth.js';
 import { asyncRoute } from '../lib/http.js';
-import { body, query, z, optionalId, optionalText } from '../lib/validate.js';
+import { body, query, z, optionalId, optionalText, optionalBool } from '../lib/validate.js';
 import { runReminderSweep } from '../lib/scheduler.js';
 import config from '../config.js';
 
@@ -300,7 +300,7 @@ const userSchema = z.object({
   division_id: optionalId,
   zone_id: optionalId,
   station_id: optionalId,
-  active: z.coerce.boolean().optional(),
+  active: optionalBool,
 });
 
 router.get(
@@ -500,7 +500,7 @@ const safeJson = (value) => {
 router.post(
   '/scheduler/run',
   requireRole(ROLES.ADMIN),
-  body(z.object({ as_of: optionalText, dry_run: z.coerce.boolean().default(false) })),
+  body(z.object({ as_of: optionalText, dry_run: optionalBool.default(false) })),
   asyncRoute(async (req, res) => {
     const summary = await runReminderSweep({
       asOf: req.body.as_of ?? undefined,

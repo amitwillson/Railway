@@ -2,7 +2,7 @@ import express from 'express';
 import { all, get, nowIso, run } from '../db/index.js';
 import { notFound } from '../lib/errors.js';
 import { authenticate, requireCapability, isAdmin } from '../middleware/auth.js';
-import { query, z } from '../lib/validate.js';
+import { query, z, optionalBool } from '../lib/validate.js';
 
 const router = express.Router();
 router.use(authenticate);
@@ -12,7 +12,7 @@ router.get(
   '/',
   query(
     z.object({
-      unread: z.coerce.boolean().optional(),
+      unread: optionalBool,
       limit: z.coerce.number().int().min(1).max(200).default(50),
     })
   ),

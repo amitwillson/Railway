@@ -17,8 +17,11 @@
     "dev:server": "npm run dev --workspace server",
     "dev:web": "npm run dev --workspace web",
     "build": "npm run build --workspace web",
-    "start": "npm run start --workspace server",
-    "test": "npm test --workspace server"
+    "start": "npm start --workspace server",
+    "test": "npm test --workspace server",
+    "seed:reset": "npm run seed:reset --workspace server",
+    "typecheck": "npm run typecheck --workspace web",
+    "smoke": "node scripts/smoke-test.mjs"
   },
   "devDependencies": {
     "concurrently": "^9.1.0"

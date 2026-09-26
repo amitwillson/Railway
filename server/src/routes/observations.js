@@ -4,7 +4,7 @@ import { audit } from '../lib/audit.js';
 import { badRequest, forbidden, notFound } from '../lib/errors.js';
 import { authenticate, requireCapability, isAdmin, isOfficer } from '../middleware/auth.js';
 import { asyncRoute } from '../lib/http.js';
-import { body, query, z, optionalId, optionalText, optionalIsoDate, isoDate } from '../lib/validate.js';
+import { body, query, z, optionalId, optionalText, optionalIsoDate, isoDate, optionalBool } from '../lib/validate.js';
 import { listObservations, observationById } from '../lib/queries.js';
 import { autoAssign } from '../lib/assignment.js';
 import { findRepeats } from '../lib/repeats.js';
@@ -54,15 +54,16 @@ const queryFilterSchema = z.object({
   inspection_id: optionalId,
   created_by: optionalId,
   division_id: optionalId,
-  open: z.coerce.boolean().optional(),
-  closed: z.coerce.boolean().optional(),
-  overdue: z.coerce.boolean().optional(),
-  due_soon: z.coerce.boolean().optional(),
-  awaiting_verification: z.coerce.boolean().optional(),
-  repeated: z.coerce.boolean().optional(),
-  critical: z.coerce.boolean().optional(),
-  mine: z.coerce.boolean().optional(),
-  assigned_to_me: z.coerce.boolean().optional(),
+  open: optionalBool,
+  closed: optionalBool,
+  overdue: optionalBool,
+  due_soon: optionalBool,
+  awaiting_verification: optionalBool,
+  repeated: optionalBool,
+  critical: optionalBool,
+  mine: optionalBool,
+  assigned_to_me: optionalBool,
+  has_tdc: optionalBool,
   from: optionalIsoDate,
   to: optionalIsoDate,
   tdc_from: optionalIsoDate,
@@ -380,7 +381,7 @@ router.patch(
       tdc: z.union([isoDate, z.null()]).optional(),
       rule_reference_id: z.union([z.coerce.number().int().positive(), z.null()]).optional(),
       contractor_id: z.union([z.coerce.number().int().positive(), z.null()]).optional(),
-      requires_physical_verification: z.coerce.boolean().optional(),
+      requires_physical_verification: optionalBool,
       remarks: optionalText,
     })
   ),

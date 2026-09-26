@@ -5,7 +5,7 @@ import { randomToken } from '../lib/ids.js';
 import { notFound, badRequest } from '../lib/errors.js';
 import { authenticate, requireCapability } from '../middleware/auth.js';
 import { asyncRoute, download } from '../lib/http.js';
-import { query, z, optionalId, optionalText, optionalIsoDate } from '../lib/validate.js';
+import { query, z, optionalId, optionalText, optionalIsoDate, optionalBool } from '../lib/validate.js';
 import { observationFilter, decorate } from '../lib/queries.js';
 import { toCsv, toXlsx, streamPdf, attachmentPath } from '../lib/exporters.js';
 import { buildAutoSummary } from './inspections.js';
@@ -70,7 +70,7 @@ const filterSchema = z.object({
   to: optionalIsoDate,
   days: z.coerce.number().int().min(1).max(3650).optional(),
   q: optionalText,
-  mine: z.coerce.boolean().optional(),
+  mine: optionalBool,
   limit: z.coerce.number().int().min(1).max(5000).default(1000),
 });
 
@@ -253,7 +253,7 @@ router.get('/catalogue', (_req, res) => {
 
 router.get(
   '/inspection/:id',
-  query(z.object({ format: z.enum(FORMATS).default('json'), photos: z.coerce.boolean().default(true) })),
+  query(z.object({ format: z.enum(FORMATS).default('json'), photos: optionalBool.default(true) })),
   asyncRoute(async (req, res) => {
     const inspection = get('SELECT * FROM v_inspections i WHERE i.id = ?', [req.params.id]);
     if (!inspection) throw notFound('Inspection');

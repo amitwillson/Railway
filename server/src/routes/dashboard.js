@@ -1,7 +1,7 @@
 import express from 'express';
 import { all, get } from '../db/index.js';
 import { authenticate, requireCapability } from '../middleware/auth.js';
-import { query, z, optionalId, optionalText, optionalIsoDate } from '../lib/validate.js';
+import { query, z, optionalId, optionalText, optionalIsoDate, optionalBool } from '../lib/validate.js';
 import { observationFilter } from '../lib/queries.js';
 
 const router = express.Router();
@@ -17,8 +17,8 @@ const filterSchema = z.object({
   from: optionalIsoDate,
   to: optionalIsoDate,
   days: z.coerce.number().int().min(1).max(3650).optional(),
-  mine: z.coerce.boolean().optional(),
-  assigned_to_me: z.coerce.boolean().optional(),
+  mine: optionalBool,
+  assigned_to_me: optionalBool,
 });
 
 /** Aggregate helper: counts over v_observations with the shared filter applied. */

@@ -5,7 +5,7 @@ import { audit } from '../lib/audit.js';
 import { badRequest, forbidden, notFound } from '../lib/errors.js';
 import { authenticate, requireCapability, isOfficer } from '../middleware/auth.js';
 import { asyncRoute } from '../lib/http.js';
-import { body, query, z, optionalId, optionalText, optionalIsoDate } from '../lib/validate.js';
+import { body, query, z, optionalId, optionalText, optionalIsoDate, optionalBool } from '../lib/validate.js';
 import { decorate, inspectionScopeClause } from '../lib/queries.js';
 import { dispatch } from '../lib/notify.js';
 
@@ -40,7 +40,7 @@ router.get(
   requireCapability('inspection:read'),
   query(
     z.object({
-      mine: z.coerce.boolean().optional(),
+      mine: optionalBool,
       module_id: optionalId,
       station_id: optionalId,
       train_id: optionalId,
