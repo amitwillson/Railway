@@ -65,6 +65,17 @@ export function createApp() {
       credentials: true,
     })
   );
+  /**
+   * Evidence and generated reports are opened directly by the browser (an
+   * <img> or a download), which cannot carry an Authorization header, so those
+   * requests pass the session token as a query parameter. Redact it before
+   * anything is written to the access log.
+   */
+  morgan.token('url', (req) => {
+    const url = req.originalUrl || req.url || '';
+    return url.replace(/([?&](?:access_token|token)=)[^&]*/gi, '$1[redacted]');
+  });
+
   app.use(compression());
   app.use(express.json({ limit: '5mb' }));
   app.use(express.urlencoded({ extended: true, limit: '5mb' }));

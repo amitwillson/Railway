@@ -225,5 +225,3 @@ export function attachmentPath(storedName) {
   const abs = path.join(config.uploadDir, path.basename(storedName));
   return fs.existsSync(abs) ? abs : null;
 }
-
-export const pdfHelpers = { hr, table };

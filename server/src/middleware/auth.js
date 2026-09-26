@@ -21,21 +21,6 @@ export function authenticate(req, _res, next) {
   }
 }
 
-/** Populates req.user when a token is present but never rejects the request. */
-export function optionalAuth(req, _res, next) {
-  try {
-    const token = bearer(req);
-    if (token) {
-      const { user, jti } = verifyToken(token);
-      req.user = user;
-      req.jti = jti;
-    }
-  } catch {
-    /* anonymous */
-  }
-  next();
-}
-
 export const ROLES = Object.freeze({
   ADMIN: 'admin',
   OFFICER: 'divisional_officer',

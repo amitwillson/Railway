@@ -234,10 +234,3 @@ export async function dispatch({
 
   return { event, recipients: userIds.length, deliveries };
 }
-
-/** Fire-and-forget wrapper: used on request paths that must not await I/O. */
-export function dispatchAsync(payload) {
-  Promise.resolve()
-    .then(() => dispatch(payload))
-    .catch((err) => console.error(`[notify] dispatch failed for ${payload.event}:`, err.message));
-}

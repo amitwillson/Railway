@@ -1,5 +1,3 @@
-import type { Paged } from './types';
-
 const TOKEN_KEY = 'ri.token';
 const BASE = '/api';
 
@@ -135,5 +133,3 @@ export function reportUrl(path: string, params?: Record<string, QueryValue>): st
 export function fileUrl(storedName: string, download = false): string {
   return `${BASE}/files/${storedName}${toQuery({ access_token: getToken(), download: download ? 1 : undefined })}`;
 }
-
-export const emptyPage = <T>(): Paged<T> => ({ data: [], page: 1, page_size: 25, total: 0, total_pages: 1 });

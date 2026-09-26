@@ -229,6 +229,12 @@ policy in production, whitelisted master-data columns, parameterised SQL through
 and size limits, evidence served only to an authenticated session, and a complete audit trail.
 `JWT_SECRET` is mandatory in production &mdash; the server refuses to start without it.
 
+One trade-off worth knowing: photographs and report downloads are opened directly by the browser,
+which cannot send an `Authorization` header, so those requests carry the session token as a query
+parameter. The access log redacts it, and sessions are revocable and time-limited &mdash; but the
+deployment should terminate TLS so the token is never in the clear. If a stricter posture is
+needed, issue short-lived download tokens in `routes/files.js` and `lib/http.js`.
+
 ---
 
 ## Configuration
