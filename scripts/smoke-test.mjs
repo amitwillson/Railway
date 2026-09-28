@@ -239,5 +239,122 @@ check('all three modules are reported', modules.data.length === 3,
 const { status: csvStatus } = await call('GET', '/reports/pending', { token: officer, params: { format: 'csv' } });
 check('reports export', csvStatus === 200);
 
+heading('11. Suggested deficiencies');
+const { data: suggestions } = await call('GET', `/masters/items/${item.id}/deficiencies`, {
+  token: inspector, params: { station_id: station.id },
+});
+check('the item offers suggested deficiencies', suggestions.data.length > 0,
+  `${suggestions.data.length} offered, narrowest first: "${suggestions.data[0]?.text}"`);
+check('the narrowest scope comes first', suggestions.data[0]?.scope === 'item' || suggestions.data[0]?.scope === 'group',
+  `scope ${suggestions.data[0]?.scope}`);
+check('a generic suggestion is worded for this item',
+  suggestions.data.some((d) => d.scope === 'generic' && d.text.startsWith(item.name)),
+  suggestions.data.find((d) => d.scope === 'generic')?.text ?? '');
+check('wordings already used here are offered too', Array.isArray(suggestions.previously_used));
+
+const picked = suggestions.data[0];
+const { status: pickedStatus, data: fromSuggestion } = await call('POST', '/observations', {
+  token: inspector,
+  body: {
+    inspection_id: inspection.id,
+    unit_id: unit.id,
+    item_id: item.id,
+    deficiency_id: picked.id,
+    observation: `${picked.text} Noticed again during this inspection.`,
+    action_by_department_id: picked.department_id ?? electrical.id,
+  },
+});
+check('an observation records the suggestion it came from', pickedStatus === 201, fromSuggestion.ref_no ?? '');
+const { data: topDeficiencies } = await call('GET', '/dashboard/deficiencies', { token: officer });
+check('it is counted in the most-reported list',
+  topDeficiencies.data.some((d) => d.deficiency_id === picked.id),
+  topDeficiencies.data[0] ? `top: "${topDeficiencies.data[0].text}" x${topDeficiencies.data[0].occurrences}` : '');
+
+heading('12. Supervisors linked to stations and departments');
+const { data: supervisorList } = await call('GET', '/masters/supervisors', {
+  token: inspector, params: { department_id: electrical.id, limit: 50 },
+});
+const sectionMan = supervisorList.data.find((s) => (s.stations?.length ?? 0) > 1);
+check('a supervisor can answer for more than one station', Boolean(sectionMan),
+  sectionMan ? `${sectionMan.name}: ${sectionMan.stations.map((l) => l.station_code).join(', ')}` : '');
+const covered = sectionMan?.stations.find((l) => !l.is_primary);
+if (covered) {
+  const { data: elsewhere } = await call('GET', '/masters/supervisors/resolve', {
+    token: inspector, params: { station_id: covered.station_id, department_id: electrical.id },
+  });
+  check('the engine finds them at a station they only cover',
+    elsewhere.data.some((c) => c.id === sectionMan.id),
+    `${covered.station_name}: ${elsewhere.auto_selected?.name} (${elsewhere.auto_selected?.match_reason})`);
+}
+const { data: multiDept } = await call('GET', '/masters/supervisors', { token: inspector, params: { limit: 300 } });
+const twoDepartments = multiDept.data.find((s) => (s.departments?.length ?? 0) > 1);
+check('a supervisor can answer for more than one department', Boolean(twoDepartments),
+  twoDepartments ? `${twoDepartments.name}: ${twoDepartments.departments.map((d) => d.department_code).join(', ')}` : '');
+
+heading('13. Inspection note');
+const { data: draft } = await call('GET', '/notes/draft', {
+  token: inspector, params: { inspection_id: inspection.id },
+});
+check('a draft compiles the observations of the inspection', draft.observations.length >= 2,
+  `${draft.observations.length} items, no. ${draft.note_no}`);
+check('the office wording is offered', Boolean(draft.letterhead && draft.preamble && draft.addressee));
+
+const { status: noteStatus, data: note } = await call('POST', '/notes', {
+  token: inspector,
+  body: { inspection_id: inspection.id, status: 'issued' },
+});
+check('the note is issued with a running number', noteStatus === 201 && note.status === 'issued',
+  `${note.note_no} | ${note.observations?.length} items`);
+check('it is grouped by the department that has to act', (note.by_department?.length ?? 0) >= 1,
+  note.by_department?.map((g) => `${g.department}:${g.observations.length}`).join(' '));
+
+const noteRes = await fetch(`${BASE}/notes/${note.id}/print?format=pdf&group_by_department=1`, {
+  headers: { authorization: `Bearer ${inspector}` },
+});
+const pdf = Buffer.from(await noteRes.arrayBuffer());
+check('it prints as a PDF letter', noteRes.status === 200 && pdf.subarray(0, 5).toString() === '%PDF-',
+  `${(pdf.length / 1024).toFixed(1)} KB`);
+
+const { status: verifyStatus, data: verified } = await call('GET', `/notes/verify/${note.qr_token}`);
+check('the printed letter verifies without a login', verifyStatus === 200 && verified.verified === true,
+  `${verified.note_no} signed by ${verified.signed_by?.name}`);
+
+const { status: rewordStatus } = await call('PATCH', `/notes/${note.id}`, {
+  token: inspector, body: { subject: 'A different subject' },
+});
+check('an issued note cannot be reworded', rewordStatus === 400);
+
+const others = await call('GET', '/observations', { token: inspector, params: { page_size: 3 } });
+const { status: compiledStatus, data: compiled } = await call('POST', '/notes', {
+  token: inspector,
+  body: {
+    observation_ids: others.data.data.map((o) => o.id),
+    subject: 'Observations compiled from more than one inspection',
+  },
+});
+check('observations from several inspections compile into one letter',
+  compiledStatus === 201 && compiled.observations.length === others.data.data.length,
+  `${compiled.note_no} | ${compiled.observations?.length} items`);
+
+heading('14. Replacing the station list');
+const admin = await login('ADMIN01');
+const exportRes = await call('GET', '/admin/stations/export', { token: admin });
+check('the current station list exports as CSV', exportRes.status === 200);
+const { data: dryRun } = await call('POST', '/admin/stations/import', {
+  token: admin,
+  body: {
+    csv: 'code,name,division,zone,category,station_type,section,platforms\n'
+      + 'JBP,Jabalpur,JBP,WCR,NSG-2,Junction,Katni - Itarsi,6\n'
+      + 'SMOKE,Smoke Test Halt,JBP,WCR,NSG-6,Halt,Katni - Itarsi,1\n'
+      + 'BAD,Unknown division,QQQ,WCR,,,,1',
+    dry_run: true,
+  },
+});
+check('a dry run reports what would change and writes nothing',
+  dryRun.counts.created === 1 && dryRun.counts.updated === 1 && dryRun.counts.skipped === 1,
+  JSON.stringify(dryRun.counts));
+const { data: before } = await call('GET', '/masters/stations', { token: admin, params: { q: 'Smoke', limit: 5 } });
+check('the dry run left the master alone', before.data.length === 0);
+
 console.log(`\n${failures.length ? `${failures.length} of ${checks} checks FAILED:\n - ${failures.join('\n - ')}` : `All ${checks} checks passed.`}\n`);
 process.exit(failures.length ? 1 : 0);

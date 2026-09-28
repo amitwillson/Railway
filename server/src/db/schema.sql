@@ -55,6 +55,7 @@ CREATE TABLE IF NOT EXISTS stations (
   zone_id      INTEGER NOT NULL REFERENCES zones(id),
   category     TEXT,                 -- NSG-1 .. NSG-6, SG-1 .., HG-1 ..
   station_type TEXT,                 -- Junction / Terminal / Halt / Flag ...
+  section      TEXT,                 -- the section the station sits on
   platforms    INTEGER NOT NULL DEFAULT 0,
   latitude     REAL,
   longitude    REAL,
@@ -212,6 +213,39 @@ CREATE TABLE IF NOT EXISTS supervisor_coverage (
 CREATE INDEX IF NOT EXISTS idx_cov_sup ON supervisor_coverage(supervisor_id);
 CREATE INDEX IF NOT EXISTS idx_cov_station ON supervisor_coverage(station_id);
 
+-- A supervisor is linked to the stations AND the departments they answer for.
+-- supervisors.station_id / supervisors.department_id remain the primary posting
+-- (one row each, mirrored here with is_primary = 1) so that existing reports and
+-- screens keep working; these two tables carry the additional links, which is
+-- what lets one SSE cover a whole section, or a Station Manager answer for both
+-- Commercial and Operating.
+CREATE TABLE IF NOT EXISTS supervisor_stations (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  supervisor_id INTEGER NOT NULL REFERENCES supervisors(id) ON DELETE CASCADE,
+  station_id    INTEGER NOT NULL REFERENCES stations(id) ON DELETE CASCADE,
+  is_primary    INTEGER NOT NULL DEFAULT 0,
+  section       TEXT,
+  priority      INTEGER NOT NULL DEFAULT 100,   -- lower wins within a station
+  active        INTEGER NOT NULL DEFAULT 1,
+  created_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  UNIQUE (supervisor_id, station_id)
+);
+CREATE INDEX IF NOT EXISTS idx_sup_stn_sup ON supervisor_stations(supervisor_id);
+CREATE INDEX IF NOT EXISTS idx_sup_stn_stn ON supervisor_stations(station_id);
+
+CREATE TABLE IF NOT EXISTS supervisor_departments (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  supervisor_id INTEGER NOT NULL REFERENCES supervisors(id) ON DELETE CASCADE,
+  department_id INTEGER NOT NULL REFERENCES departments(id) ON DELETE CASCADE,
+  is_primary    INTEGER NOT NULL DEFAULT 0,
+  priority      INTEGER NOT NULL DEFAULT 100,
+  active        INTEGER NOT NULL DEFAULT 1,
+  created_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  UNIQUE (supervisor_id, department_id)
+);
+CREATE INDEX IF NOT EXISTS idx_sup_dep_sup ON supervisor_departments(supervisor_id);
+CREATE INDEX IF NOT EXISTS idx_sup_dep_dep ON supervisor_departments(department_id);
+
 -- ---------------------------------------------------------------------------
 -- 4. Inspection masters (modules, types, items, parameters)
 -- ---------------------------------------------------------------------------
@@ -280,6 +314,30 @@ CREATE TABLE IF NOT EXISTS item_parameter_map (
   sort_order   INTEGER NOT NULL DEFAULT 100,
   PRIMARY KEY (item_id, parameter_id)
 );
+
+-- Suggested deficiencies ("what usually fails") offered as a dropdown under the
+-- observation box, so the inspector picks the common wording instead of typing it.
+-- A row is scoped by the narrowest of item_id, group_id and module_id that is set;
+-- a row with all three NULL is offered for every item. {item} in the text is
+-- replaced with the item's name when the row is served, which is what lets one
+-- row read correctly under two hundred different items.
+CREATE TABLE IF NOT EXISTS item_deficiencies (
+  id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+  item_id               INTEGER REFERENCES inspection_items(id) ON DELETE CASCADE,
+  group_id              INTEGER REFERENCES item_groups(id) ON DELETE CASCADE,
+  module_id             INTEGER REFERENCES modules(id) ON DELETE CASCADE,
+  text                  TEXT NOT NULL,
+  default_severity_id   INTEGER REFERENCES severities(id),
+  default_department_id INTEGER REFERENCES departments(id),
+  default_category_id   INTEGER,
+  suggested_tdc_days    INTEGER,
+  sort_order            INTEGER NOT NULL DEFAULT 100,
+  active                INTEGER NOT NULL DEFAULT 1,
+  created_at            TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+CREATE INDEX IF NOT EXISTS idx_defic_item ON item_deficiencies(item_id);
+CREATE INDEX IF NOT EXISTS idx_defic_group ON item_deficiencies(group_id);
+CREATE INDEX IF NOT EXISTS idx_defic_module ON item_deficiencies(module_id);
 
 CREATE TABLE IF NOT EXISTS observation_categories (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -433,6 +491,7 @@ CREATE TABLE IF NOT EXISTS observations (
   unit_name             TEXT,           -- denormalised snapshot
   item_id               INTEGER REFERENCES inspection_items(id),
   item_name             TEXT,           -- denormalised snapshot
+  deficiency_id         INTEGER REFERENCES item_deficiencies(id),
   parameters            TEXT,           -- JSON [{parameter_id,name,value}]
   observation           TEXT NOT NULL,
   category_id           INTEGER REFERENCES observation_categories(id),
@@ -600,6 +659,53 @@ CREATE TABLE IF NOT EXISTS reminder_log (
 -- ---------------------------------------------------------------------------
 -- 8. Reports & verification
 -- ---------------------------------------------------------------------------
+
+-- An Inspection Note is the letter that goes out after an inspection: several
+-- observations compiled into one numbered, signed communication in the office
+-- letter format. The note is a record in its own right - it keeps its number and
+-- its wording even as the observations it cites move through the workflow - so it
+-- is stored rather than rendered on the fly.
+CREATE TABLE IF NOT EXISTS inspection_notes (
+  id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+  note_no               TEXT NOT NULL UNIQUE,
+  inspection_id         INTEGER REFERENCES inspections(id) ON DELETE SET NULL,
+  module_id             INTEGER REFERENCES modules(id),
+  station_id            INTEGER REFERENCES stations(id),
+  train_id              INTEGER REFERENCES trains(id),
+  letter_date           TEXT NOT NULL,
+  subject               TEXT NOT NULL,
+  addressee             TEXT,
+  salutation            TEXT,
+  preamble              TEXT,
+  closing               TEXT,
+  copy_to               TEXT,
+  signatory_name        TEXT,
+  signatory_designation TEXT,
+  office                TEXT,
+  letterhead            TEXT,
+  status                TEXT NOT NULL DEFAULT 'draft'
+                        CHECK (status IN ('draft','issued','cancelled')),
+  qr_token              TEXT UNIQUE,
+  created_by            INTEGER NOT NULL REFERENCES users(id),
+  issued_at             TEXT,
+  created_at            TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  updated_at            TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_notes_inspection ON inspection_notes(inspection_id);
+CREATE INDEX IF NOT EXISTS idx_notes_station ON inspection_notes(station_id);
+CREATE INDEX IF NOT EXISTS idx_notes_created_by ON inspection_notes(created_by);
+
+-- Which observations the note compiles, and in which order they are numbered.
+CREATE TABLE IF NOT EXISTS inspection_note_observations (
+  id             INTEGER PRIMARY KEY AUTOINCREMENT,
+  note_id        INTEGER NOT NULL REFERENCES inspection_notes(id) ON DELETE CASCADE,
+  observation_id INTEGER NOT NULL REFERENCES observations(id) ON DELETE CASCADE,
+  sl_no          INTEGER NOT NULL DEFAULT 1,
+  remarks        TEXT,
+  UNIQUE (note_id, observation_id)
+);
+CREATE INDEX IF NOT EXISTS idx_note_obs_note ON inspection_note_observations(note_id);
+CREATE INDEX IF NOT EXISTS idx_note_obs_obs ON inspection_note_observations(observation_id);
 
 CREATE TABLE IF NOT EXISTS report_tokens (
   token        TEXT PRIMARY KEY,

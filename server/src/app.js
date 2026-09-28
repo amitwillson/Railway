@@ -18,6 +18,7 @@ import complianceRoutes from './routes/compliance.js';
 import dashboardRoutes from './routes/dashboard.js';
 import historyRoutes from './routes/history.js';
 import reportRoutes from './routes/reports.js';
+import noteRoutes from './routes/notes.js';
 import notificationRoutes from './routes/notifications.js';
 import searchRoutes from './routes/search.js';
 import syncRoutes from './routes/sync.js';
@@ -117,6 +118,7 @@ export function createApp() {
   app.use('/api/dashboard', dashboardRoutes);
   app.use('/api/history', historyRoutes);
   app.use('/api/reports', reportRoutes);
+  app.use('/api/notes', noteRoutes);
   app.use('/api/notifications', notificationRoutes);
   app.use('/api/search', searchRoutes);
   app.use('/api/sync', syncRoutes);

@@ -4,6 +4,7 @@ import { badRequest, forbidden } from '../lib/errors.js';
 import { observationById } from '../lib/queries.js';
 import { autoAssign } from '../lib/assignment.js';
 import { findRepeats } from '../lib/repeats.js';
+import { deficiencyFor } from '../lib/deficiencies.js';
 import { dispatch } from '../lib/notify.js';
 import { tdcRuleFor } from '../lib/scheduler.js';
 import { audit } from '../lib/audit.js';
@@ -62,6 +63,10 @@ export async function createObservation({ payload, user, req = null }) {
       )
     : null;
   const unit = payload.unit_id ? get('SELECT * FROM units WHERE id = ?', [payload.unit_id]) : null;
+  // Which suggested deficiency the inspector picked, if any. Recording it is what
+  // lets the dashboard answer "which deficiencies are reported most often"; the
+  // text itself stays whatever the inspector finally submitted.
+  const deficiency = deficiencyFor(payload.deficiency_id, item);
   const department = get('SELECT * FROM departments WHERE id = ? AND active = 1', [
     payload.action_by_department_id,
   ]);
@@ -114,6 +119,7 @@ export async function createObservation({ payload, user, req = null }) {
       unit_name: unitName,
       item_id: payload.item_id ?? null,
       item_name: item?.name ?? null,
+      deficiency_id: deficiency?.id ?? null,
       parameters: payload.parameters?.length ? JSON.stringify(payload.parameters) : null,
       observation: payload.observation,
       category_id: categoryId,

@@ -40,12 +40,12 @@ const CAPABILITIES = {
     'inspection:read', 'inspection:create', 'inspection:update',
     'observation:read', 'observation:create', 'observation:update', 'observation:verify',
     'observation:cancel', 'compliance:read', 'dashboard:read', 'report:read',
-    'master:read', 'supervisor:read', 'audit:read', 'notification:read',
+    'note:create', 'master:read', 'supervisor:read', 'audit:read', 'notification:read',
   ],
   inspector: [
     'inspection:read', 'inspection:create', 'inspection:update',
     'observation:read', 'observation:create', 'observation:update', 'observation:verify',
-    'compliance:read', 'dashboard:read', 'report:read', 'master:read',
+    'compliance:read', 'dashboard:read', 'report:read', 'note:create', 'master:read',
     'supervisor:read', 'notification:read',
   ],
   supervisor: [

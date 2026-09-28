@@ -8,7 +8,7 @@ export type IconName =
   | 'alert' | 'clock' | 'file' | 'download' | 'chevron-right' | 'chevron-left'
   | 'chevron-down' | 'close' | 'filter' | 'refresh' | 'offline' | 'cloud-up'
   | 'shield' | 'repeat' | 'water' | 'info' | 'menu' | 'logout' | 'moon' | 'sun'
-  | 'signature' | 'qr' | 'link' | 'trash' | 'edit' | 'send' | 'sort';
+  | 'signature' | 'qr' | 'link' | 'trash' | 'edit' | 'send' | 'sort' | 'printer';
 
 const PATHS: Record<IconName, string> = {
   home: 'M3 10.5 12 3l9 7.5M5.5 9.5V20h13V9.5M9.5 20v-6h5v6',
@@ -30,6 +30,7 @@ const PATHS: Record<IconName, string> = {
   alert: 'M12 3 2.5 20h19L12 3ZM12 9v5M12 17h.01',
   clock: 'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18ZM12 7.5V12l3 2',
   file: 'M14 3.5H7A1.5 1.5 0 0 0 5.5 5v14A1.5 1.5 0 0 0 7 20.5h10a1.5 1.5 0 0 0 1.5-1.5V8L14 3.5ZM13.5 3.5V8h5M8.5 13h7M8.5 16.5h4',
+  printer: 'M7 8.5V3.5h10v5M7 17.5H5.5A1.5 1.5 0 0 1 4 16v-6a1.5 1.5 0 0 1 1.5-1.5h13A1.5 1.5 0 0 1 20 10v6a1.5 1.5 0 0 1-1.5 1.5H17M7 13.5h10v7H7Z',
   download: 'M12 3.5v12M7.5 11 12 15.5 16.5 11M4.5 20.5h15',
   'chevron-right': 'm9.5 5.5 6.5 6.5-6.5 6.5',
   'chevron-left': 'm14.5 5.5-6.5 6.5 6.5 6.5',

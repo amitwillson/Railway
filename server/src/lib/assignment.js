@@ -8,21 +8,36 @@ import { all, get } from '../db/index.js';
  * that combination. The inspector never types a mobile number: the top
  * candidate is pre-selected and the rest are offered in a searchable dropdown.
  *
+ * A supervisor is linked to stations and to departments (see the
+ * supervisor_stations and supervisor_departments tables). The primary posting on
+ * the supervisor row counts as one such link, so a supervisor who covers a whole
+ * section is found at every station on it, and a Station Manager who answers for
+ * both Commercial and Operating is found under either department.
+ *
  * Ranking (lower score wins):
  *   10  explicit coverage row for this exact station + unit
  *   20  explicit coverage row for this station + unit kind
+ *   25  explicit coverage row for this item's group
  *   30  explicit coverage row for this station (any unit)
- *   40  supervisor posted at this station in this department, area matches unit
- *   50  supervisor posted at this station in this department
+ *   40  linked to this station in this department, area matches the unit
+ *   50  linked to this station in this department (primary posting)
+ *   55  linked to this station in this department (additional station)
  *   60  divisional/default supervisor for this department
  *   70  any active supervisor in this department
+ *
+ * A supervisor who only covers the department as an additional link scores two
+ * points worse than one whose primary department it is, so the person whose
+ * department it actually is always wins a tie.
  */
+const SECONDARY_DEPARTMENT_PENALTY = 2;
+
 export function findSupervisors({ stationId, unitId, departmentId, itemId, limit = 25 } = {}) {
   if (!departmentId) return [];
 
   const unit = unitId ? get('SELECT id, name, kind FROM units WHERE id = ?', [unitId]) : null;
   const item = itemId ? get('SELECT id, group_id FROM inspection_items WHERE id = ?', [itemId]) : null;
 
+  // Eligible = primary department, or an additional department link.
   const rows = all(
     `SELECT s.*, d.name AS department_name, d.code AS department_code,
             st.name AS station_name, st.code AS station_code,
@@ -31,40 +46,92 @@ export function findSupervisors({ stationId, unitId, departmentId, itemId, limit
        JOIN departments d ON d.id = s.department_id
        LEFT JOIN stations st ON st.id = s.station_id
        LEFT JOIN supervisors ro ON ro.id = s.reporting_officer_id
-      WHERE s.active = 1 AND s.department_id = ?`,
-    [departmentId]
+      WHERE s.active = 1
+        AND (s.department_id = ?
+             OR EXISTS (SELECT 1 FROM supervisor_departments sd
+                         WHERE sd.supervisor_id = s.id AND sd.active = 1
+                           AND sd.department_id = ?))`,
+    [departmentId, departmentId]
   );
+  if (rows.length === 0) return [];
 
+  const ids = rows.map((r) => r.id);
+  const placeholders = ids.map(() => '?').join(', ');
   const coverage = all(
-    `SELECT * FROM supervisor_coverage WHERE active = 1 AND supervisor_id IN (
-       SELECT id FROM supervisors WHERE active = 1 AND department_id = ?)`,
-    [departmentId]
+    `SELECT * FROM supervisor_coverage
+      WHERE active = 1 AND supervisor_id IN (${placeholders})`,
+    ids
+  );
+  const stationLinks = all(
+    `SELECT ss.*, st.name AS station_name, st.code AS station_code
+       FROM supervisor_stations ss
+       JOIN stations st ON st.id = ss.station_id
+      WHERE ss.active = 1 AND ss.supervisor_id IN (${placeholders})
+      ORDER BY ss.is_primary DESC, ss.priority, st.name`,
+    ids
+  );
+  const departmentLinks = all(
+    `SELECT sd.*, d.name AS department_name, d.code AS department_code
+       FROM supervisor_departments sd
+       JOIN departments d ON d.id = sd.department_id
+      WHERE sd.active = 1 AND sd.supervisor_id IN (${placeholders})
+      ORDER BY sd.is_primary DESC, sd.priority, d.sort_order`,
+    ids
   );
 
   const scored = rows.map((sup) => {
     const covers = coverage.filter((c) => c.supervisor_id === sup.id);
+    const stations = stationLinks.filter((l) => l.supervisor_id === sup.id);
+    const departments = departmentLinks.filter((l) => l.supervisor_id === sup.id);
+
+    // The primary posting on the supervisor row is a station link too.
+    const linkedStations = stations.some((l) => l.station_id === sup.station_id) || !sup.station_id
+      ? stations
+      : [
+          {
+            station_id: sup.station_id,
+            station_name: sup.station_name,
+            station_code: sup.station_code,
+            is_primary: 1,
+            priority: 100,
+          },
+          ...stations,
+        ];
+    const stationLink = stationId ? linkedStations.find((l) => l.station_id === stationId) : null;
+    const isPrimaryDepartment =
+      sup.department_id === departmentId || departments.some((l) => l.department_id === departmentId && l.is_primary);
+    const penalty = isPrimaryDepartment ? 0 : SECONDARY_DEPARTMENT_PENALTY;
+    const departmentLabel = isPrimaryDepartment
+      ? sup.department_name
+      : departments.find((l) => l.department_id === departmentId)?.department_name ?? sup.department_name;
+
     let score = 70;
-    let reason = `Active ${sup.department_name} supervisor`;
+    let reason = `Active ${departmentLabel} supervisor`;
 
     if (sup.is_default_for_department) {
       score = 60;
-      reason = `Nominated ${sup.department_name} supervisor`;
+      reason = `Nominated ${departmentLabel} supervisor`;
     }
-    if (stationId && sup.station_id === stationId) {
-      score = 50;
-      reason = `Posted at ${sup.station_name} (${sup.department_name})`;
+    if (stationLink) {
+      const where = stationLink.station_name ?? 'this station';
+      const isPosting = Boolean(stationLink.is_primary) || stationLink.station_id === sup.station_id;
+      score = isPosting ? 50 : 55;
+      reason = isPosting
+        ? `Posted at ${where} (${departmentLabel})`
+        : `Covers ${where} (${departmentLabel})`;
       if (unit && matchesArea(sup.area_of_responsibility, unit.name)) {
         score = 40;
-        reason = `Responsible for ${unit.name} at ${sup.station_name}`;
+        reason = `Responsible for ${unit.name} at ${where}`;
       }
     }
     for (const c of covers) {
       const sameStation = c.station_id != null && c.station_id === stationId;
       const globalStation = c.station_id == null;
       if (!sameStation && !globalStation) continue;
+      const at = stationLink?.station_name ?? sup.station_name;
       if (unit && c.unit_id && c.unit_id === unit.id) {
         score = Math.min(score, 10 + c.priority / 1000);
-        reason = `Mapped to ${unit.name}${sup.station_name ? ` at ${sup.station_name}` : ''}`;
+        reason = `Mapped to ${unit.name}${at ? ` at ${at}` : ''}`;
       } else if (unit && c.unit_kind && unit.kind && c.unit_kind === unit.kind) {
         score = Math.min(score, 20 + c.priority / 1000);
         reason = `Mapped to all ${c.unit_kind} areas`;
@@ -73,10 +140,28 @@ export function findSupervisors({ stationId, unitId, departmentId, itemId, limit
         reason = 'Mapped to this inspection category';
       } else if (sameStation && !c.unit_id && !c.unit_kind && !c.item_group_id) {
         score = Math.min(score, 30 + c.priority / 1000);
-        reason = `Mapped to ${sup.station_name ?? 'this station'}`;
+        reason = `Mapped to ${at ?? 'this station'}`;
       }
     }
-    return { ...sup, active: Boolean(sup.active), match_score: score, match_reason: reason };
+    return {
+      ...sup,
+      active: Boolean(sup.active),
+      station_links: linkedStations.map((l) => ({
+        station_id: l.station_id,
+        station_name: l.station_name,
+        station_code: l.station_code,
+        is_primary: Boolean(l.is_primary),
+        section: l.section ?? null,
+      })),
+      department_links: departments.map((l) => ({
+        department_id: l.department_id,
+        department_name: l.department_name,
+        department_code: l.department_code,
+        is_primary: Boolean(l.is_primary),
+      })),
+      match_score: score + penalty,
+      match_reason: reason,
+    };
   });
 
   return scored
@@ -88,6 +173,30 @@ export function findSupervisors({ stationId, unitId, departmentId, itemId, limit
 export function autoAssign(params) {
   const [best] = findSupervisors({ ...params, limit: 1 });
   return best ?? null;
+}
+
+/** The stations and departments a supervisor is linked to, primary link first. */
+export function supervisorLinks(supervisorId) {
+  return {
+    stations: all(
+      `SELECT ss.id, ss.station_id, ss.is_primary, ss.section, ss.priority, ss.active,
+              st.name AS station_name, st.code AS station_code
+         FROM supervisor_stations ss
+         JOIN stations st ON st.id = ss.station_id
+        WHERE ss.supervisor_id = ?
+        ORDER BY ss.is_primary DESC, ss.priority, st.name`,
+      [supervisorId]
+    ).map((r) => ({ ...r, is_primary: Boolean(r.is_primary), active: Boolean(r.active) })),
+    departments: all(
+      `SELECT sd.id, sd.department_id, sd.is_primary, sd.priority, sd.active,
+              d.name AS department_name, d.code AS department_code
+         FROM supervisor_departments sd
+         JOIN departments d ON d.id = sd.department_id
+        WHERE sd.supervisor_id = ?
+        ORDER BY sd.is_primary DESC, sd.priority, d.sort_order`,
+      [supervisorId]
+    ).map((r) => ({ ...r, is_primary: Boolean(r.is_primary), active: Boolean(r.active) })),
+  };
 }
 
 function matchesArea(area, unitName) {

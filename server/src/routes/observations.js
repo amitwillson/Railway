@@ -146,6 +146,7 @@ const createSchema = z.object({
   unit_id: optionalId,
   unit_name: optionalText,
   item_id: optionalId,
+  deficiency_id: optionalId,
   coach: optionalText,
   parameters: z
     .array(

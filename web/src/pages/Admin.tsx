@@ -9,8 +9,10 @@ import {
   Badge, Banner, Button, Card, EmptyState, Field, Loading, Pager, Sheet, Tabs,
 } from '../components/ui';
 import { formatDateTime, titleCase } from '../lib/format';
+import { SearchSelect } from '../components/ui';
+import type { Department, Station, Supervisor } from '../api/types';
 
-type Tab = 'masters' | 'users' | 'settings' | 'audit' | 'system';
+type Tab = 'masters' | 'supervisors' | 'users' | 'settings' | 'audit' | 'system';
 
 interface ResourceMeta { key: string; label: string; columns: string[]; count: number; searchable: boolean }
 type Row = Record<string, string | number | null>;
@@ -43,6 +45,7 @@ export default function Admin() {
       <Tabs
         tabs={[
           { key: 'masters', label: 'Master data' },
+          { key: 'supervisors', label: 'Supervisors' },
           { key: 'users', label: 'Users' },
           { key: 'settings', label: 'Settings & rules' },
           { key: 'audit', label: 'Audit trail' },
@@ -56,6 +59,7 @@ export default function Admin() {
       />
 
       {tab === 'masters' && <Masters />}
+      {tab === 'supervisors' && <SupervisorLinks />}
       {tab === 'users' && <Users />}
       {tab === 'settings' && <Settings />}
       {tab === 'audit' && <Audit />}
@@ -79,6 +83,7 @@ function Masters() {
   const [term, setTerm] = useState('');
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState<Row | 'new' | null>(null);
+  const [importing, setImporting] = useState(false);
 
   useEffect(() => {
     api.get<{ data: ResourceMeta[] }>('/admin/resources').then((r) => setResources(r.data)).catch(() => {});
@@ -150,7 +155,18 @@ function Masters() {
       <Card
         title={meta?.label ?? titleCase(selected)}
         subtitle={`${total} record${total === 1 ? '' : 's'}`}
-        action={editable ? <Button size="sm" icon="plus" onClick={() => setEditing('new')}>Add</Button> : undefined}
+        action={
+          editable ? (
+            <div className="row" style={{ gap: 6 }}>
+              {selected === 'stations' && (
+                <Button size="sm" variant="quiet" icon="cloud-up" onClick={() => setImporting(true)}>
+                  Import
+                </Button>
+              )}
+              <Button size="sm" icon="plus" onClick={() => setEditing('new')}>Add</Button>
+            </div>
+          ) : undefined
+        }
         pad={false}
       >
         {meta?.searchable && (
@@ -198,6 +214,8 @@ function Masters() {
           </div>
         )}
       </Card>
+
+      {importing && <StationImport onClose={() => setImporting(false)} onDone={load} />}
 
       {editing && meta && (
         <Sheet
@@ -262,6 +280,413 @@ function Masters() {
           </form>
         </Sheet>
       )}
+    </div>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/* Replacing the station list                                                 */
+/*                                                                            */
+/* Every division has to put its own station list in before the system is used */
+/* in earnest, and editing forty stations one at a time is not a reasonable way */
+/* to do that. Export gives the current list in exactly the shape the importer  */
+/* accepts, and a dry run says what would change before anything is written.    */
+/* -------------------------------------------------------------------------- */
+
+interface ImportResult {
+  dry_run: boolean;
+  counts: { created: number; updated: number; deactivated: number; skipped: number };
+  created: { line: number; code: string; name: string }[];
+  updated: { line: number; code: string; name: string }[];
+  deactivated: { code: string; name: string }[];
+  skipped: { line: number; code: string; reason: string }[];
+  total_after: number | null;
+}
+
+function StationImport({ onClose, onDone }: { onClose: () => void; onDone: () => void }) {
+  const toast = useToast();
+  const [csv, setCsv] = useState('');
+  const [deactivateMissing, setDeactivateMissing] = useState(false);
+  const [result, setResult] = useState<ImportResult | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const run = async (dryRun: boolean) => {
+    setBusy(true);
+    try {
+      const response = await api.post<ImportResult>('/admin/stations/import', {
+        csv,
+        dry_run: dryRun,
+        deactivate_missing: deactivateMissing,
+      });
+      setResult(response);
+      if (!dryRun) {
+        toast.success(
+          `${response.counts.created} added, ${response.counts.updated} updated, ${response.counts.deactivated} deactivated`
+        );
+        onDone();
+      }
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : 'Could not read the file');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const readFile = (file: File) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      setCsv(String(reader.result ?? ''));
+      setResult(null);
+    };
+    reader.readAsText(file);
+  };
+
+  return (
+    <Sheet
+      title="Import the station list"
+      subtitle="CSV, identified by station code"
+      onClose={onClose}
+      footer={
+        <>
+          <Button variant="quiet" onClick={onClose}>Close</Button>
+          <Button variant="ghost" loading={busy} disabled={csv.trim().length < 10} onClick={() => void run(true)}>
+            Check
+          </Button>
+          <Button loading={busy} disabled={csv.trim().length < 10} onClick={() => void run(false)}>
+            Import
+          </Button>
+        </>
+      }
+    >
+      <Banner tone="info">
+        The header must carry at least <code>code</code> and <code>name</code>; <code>division</code>,{' '}
+        <code>zone</code>, <code>category</code>, <code>station_type</code>, <code>section</code>,{' '}
+        <code>platforms</code>, <code>latitude</code>, <code>longitude</code> and <code>active</code> are optional. A
+        code already in the master is updated; a new one is added. Nothing is ever deleted.
+      </Banner>
+
+      <div className="row row--wrap" style={{ gap: 8, margin: '12px 0' }}>
+        {exportReport ? (
+          <span className="xsmall muted">Export is produced by the server in the deployed application.</span>
+        ) : (
+          <a className="btn btn--ghost btn--sm" href={reportUrl('/admin/stations/export', {})}>
+            <Icon name="download" size={14} /> Export the current list
+          </a>
+        )}
+        <label className="btn btn--ghost btn--sm">
+          <Icon name="file" size={14} /> Choose a CSV file
+          <input
+            type="file"
+            accept=".csv,text/csv"
+            style={{ display: 'none' }}
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              if (file) readFile(file);
+            }}
+          />
+        </label>
+      </div>
+
+      <Field label="CSV" hint="Paste it, or choose a file above">
+        <textarea
+          className="textarea"
+          style={{ minHeight: 160, fontFamily: 'var(--mono, ui-monospace, monospace)', fontSize: '0.78rem' }}
+          value={csv}
+          onChange={(e) => {
+            setCsv(e.target.value);
+            setResult(null);
+          }}
+          placeholder={'code,name,division,zone,category,station_type,section,platforms\nJBP,Jabalpur,JBP,WCR,NSG-2,Junction,Katni - Itarsi,6'}
+        />
+      </Field>
+
+      <label className="pick">
+        <input
+          type="checkbox"
+          checked={deactivateMissing}
+          onChange={(e) => {
+            setDeactivateMissing(e.target.checked);
+            setResult(null);
+          }}
+        />
+        <span className="small">
+          Deactivate the stations not in this file
+          <span className="xsmall muted" style={{ display: 'block' }}>
+            They stay in the database, so old observations still resolve - they simply stop being offered.
+          </span>
+        </span>
+      </label>
+
+      {result && (
+        <Card
+          title={result.dry_run ? 'What this file would do' : 'Imported'}
+          icon={result.dry_run ? 'info' : 'check'}
+          className="mt-12"
+        >
+          <div className="row row--wrap" style={{ gap: 14, marginBottom: 10 }}>
+            {([
+              ['Added', result.counts.created],
+              ['Updated', result.counts.updated],
+              ['Deactivated', result.counts.deactivated],
+              ['Skipped', result.counts.skipped],
+            ] as [string, number][]).map(([label, value]) => (
+              <span key={label} className="xsmall">
+                <b className="mono-num" style={{ fontSize: '1.05rem' }}>{value}</b> <span className="muted">{label}</span>
+              </span>
+            ))}
+          </div>
+          {result.skipped.length > 0 && (
+            <div className="stack" style={{ '--gap': '3px' } as React.CSSProperties}>
+              {result.skipped.map((row) => (
+                <div key={`${row.line}-${row.code}`} className="xsmall" style={{ color: 'var(--critical)' }}>
+                  Line {row.line}{row.code ? ` (${row.code})` : ''}: {row.reason}
+                </div>
+              ))}
+            </div>
+          )}
+          {result.dry_run && result.counts.skipped === 0 && (
+            <div className="xsmall muted">Nothing has been written yet. Choose Import to apply it.</div>
+          )}
+        </Card>
+      )}
+    </Sheet>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/* Supervisors: the stations and departments each one answers for              */
+/*                                                                            */
+/* This is what the auto-assignment engine reads. A supervisor has one primary */
+/* posting and one primary department, and any number of further links - which */
+/* is how a section SSE, or a Station Manager who answers for two departments, */
+/* is represented without duplicating the person.                              */
+/* -------------------------------------------------------------------------- */
+
+function SupervisorLinks() {
+  const toast = useToast();
+  const { can, masters } = useAuth();
+  const [list, setList] = useState<Supervisor[]>([]);
+  const [term, setTerm] = useState('');
+  const [selectedId, setSelectedId] = useState<number | null>(null);
+  const [detail, setDetail] = useState<Supervisor | null>(null);
+  const [stations, setStations] = useState<Station[]>([]);
+  const [busy, setBusy] = useState(false);
+  const editable = can('admin');
+
+  const loadList = useCallback(() => {
+    api.get<{ data: Supervisor[] }>('/masters/supervisors', { q: term || undefined, limit: 300 })
+      .then((r) => setList(r.data))
+      .catch(() => setList([]));
+  }, [term]);
+
+  useEffect(loadList, [loadList]);
+
+  useEffect(() => {
+    api.get<{ data: Station[] }>('/masters/stations', { limit: 300 })
+      .then((r) => setStations(r.data))
+      .catch(() => setStations([]));
+  }, []);
+
+  const loadDetail = useCallback(() => {
+    if (!selectedId) {
+      setDetail(null);
+      return;
+    }
+    api.get<Supervisor>(`/masters/supervisors/${selectedId}`)
+      .then(setDetail)
+      .catch(() => setDetail(null));
+  }, [selectedId]);
+
+  useEffect(loadDetail, [loadDetail]);
+
+  const refresh = () => {
+    loadDetail();
+    loadList();
+  };
+
+  const addLink = async (kind: 'stations' | 'departments', id: number) => {
+    if (!detail) return;
+    setBusy(true);
+    try {
+      await api.post(`/admin/masters/supervisor_${kind}`, {
+        supervisor_id: detail.id,
+        [kind === 'stations' ? 'station_id' : 'department_id']: id,
+        is_primary: 0,
+        priority: 50,
+        active: 1,
+      });
+      toast.success(kind === 'stations' ? 'Station linked' : 'Department linked');
+      refresh();
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : 'Could not add the link');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const removeLink = async (kind: 'stations' | 'departments', linkId: number) => {
+    setBusy(true);
+    try {
+      await api.del(`/admin/masters/supervisor_${kind}/${linkId}`);
+      toast.success('Link removed - past observations keep their assignment');
+      refresh();
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : 'Could not remove the link');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const linkedStationIds = new Set((detail?.stations ?? []).map((l) => l.station_id));
+  const linkedDepartmentIds = new Set((detail?.departments ?? []).map((l) => l.department_id));
+
+  return (
+    <div className="stack" style={{ '--gap': '12px' } as React.CSSProperties}>
+      <Banner tone="info" icon="users">
+        The engine that picks the concerned supervisor reads these links: station + department (+ unit) identifies the
+        person, so the inspector never types a mobile number. A link is deactivated rather than deleted, because
+        observations already assigned keep pointing at it.
+      </Banner>
+
+      <input
+        className="input"
+        placeholder="Search supervisor by name, employee ID or designation"
+        value={term}
+        onChange={(e) => setTerm(e.target.value)}
+      />
+
+      <div className="grid grid--2">
+        <Card title={`Supervisors (${list.length})`} pad={false}>
+          <div style={{ maxHeight: '58vh', overflowY: 'auto' }}>
+            {list.map((sup) => (
+              <button
+                key={sup.id}
+                type="button"
+                className={`pick-row${selectedId === sup.id ? ' pick-row--on' : ''}`}
+                onClick={() => setSelectedId(sup.id)}
+              >
+                <span style={{ flex: 1, minWidth: 0 }}>
+                  <span className="small strong truncate">{sup.name}</span>
+                  <span className="xsmall muted truncate" style={{ display: 'block' }}>
+                    {[sup.designation, sup.department_name].filter(Boolean).join(' · ')}
+                  </span>
+                </span>
+                <span className="xsmall muted">
+                  {sup.station_count ?? 0} stn · {sup.department_count ?? 0} dept
+                </span>
+              </button>
+            ))}
+            {list.length === 0 && <EmptyState icon="users" title="No supervisor matches" />}
+          </div>
+        </Card>
+
+        {!detail ? (
+          <Card>
+            <EmptyState
+              icon="user"
+              title="Select a supervisor"
+              text="Their stations and departments appear here, and the assignment engine follows whatever is set."
+            />
+          </Card>
+        ) : (
+          <div className="stack" style={{ '--gap': '12px' } as React.CSSProperties}>
+            <Card title={detail.name} subtitle={[detail.designation, detail.employee_id].filter(Boolean).join(' · ')}>
+              <dl className="kv">
+                <dt>Primary department</dt><dd>{detail.department_name}</dd>
+                <dt>Primary posting</dt><dd>{detail.station_name ?? 'Not set'}</dd>
+                {detail.mobile && (<><dt>Mobile</dt><dd className="mono-num">{detail.mobile}</dd></>)}
+                {detail.area_of_responsibility && (
+                  <><dt>Area of responsibility</dt><dd>{detail.area_of_responsibility}</dd></>
+                )}
+                {detail.reporting_officer_name && (
+                  <><dt>Reports to</dt><dd>{detail.reporting_officer_name}</dd></>
+                )}
+              </dl>
+            </Card>
+
+            <Card title="Stations answered for" icon="station" subtitle={`${detail.stations?.length ?? 0} linked`}>
+              <div className="row row--wrap" style={{ gap: 6, marginBottom: editable ? 12 : 0 }}>
+                {(detail.stations ?? []).map((link) => (
+                  <span key={link.station_id} className="tag">
+                    {link.station_name} ({link.station_code})
+                    {link.is_primary && <Badge tone="accent">Posting</Badge>}
+                    {editable && !link.is_primary && link.id && (
+                      <button
+                        type="button"
+                        className="tag__x"
+                        aria-label={`Remove ${link.station_name}`}
+                        disabled={busy}
+                        onClick={() => void removeLink('stations', link.id as number)}
+                      >
+                        <Icon name="close" size={11} />
+                      </button>
+                    )}
+                  </span>
+                ))}
+                {(detail.stations ?? []).length === 0 && (
+                  <span className="xsmall muted">No station linked - this supervisor is only found through the department.</span>
+                )}
+              </div>
+              {editable && (
+                <Field label="Add a station" hint="Every station on the section this supervisor covers">
+                  <SearchSelect
+                    options={stations
+                      .filter((st) => !linkedStationIds.has(st.id))
+                      .map((st) => ({
+                        value: st.id,
+                        label: `${st.name} (${st.code})`,
+                        sub: st.section ?? undefined,
+                        keywords: st.code,
+                      }))}
+                    value={null}
+                    onChange={(value) => value && void addLink('stations', Number(value))}
+                    placeholder="Select a station to link"
+                    searchPlaceholder="Search stations"
+                  />
+                </Field>
+              )}
+            </Card>
+
+            <Card title="Departments answered for" icon="users" subtitle={`${detail.departments?.length ?? 0} linked`}>
+              <div className="row row--wrap" style={{ gap: 6, marginBottom: editable ? 12 : 0 }}>
+                {(detail.departments ?? []).map((link) => (
+                  <span key={link.department_id} className="tag">
+                    {link.department_name}
+                    {link.is_primary && <Badge tone="accent">Primary</Badge>}
+                    {editable && !link.is_primary && link.id && (
+                      <button
+                        type="button"
+                        className="tag__x"
+                        aria-label={`Remove ${link.department_name}`}
+                        disabled={busy}
+                        onClick={() => void removeLink('departments', link.id as number)}
+                      >
+                        <Icon name="close" size={11} />
+                      </button>
+                    )}
+                  </span>
+                ))}
+              </div>
+              {editable && (
+                <Field
+                  label="Also answers for"
+                  hint="A second department ranks just below the people whose department it is"
+                >
+                  <SearchSelect
+                    options={(masters?.departments ?? [])
+                      .filter((d: Department) => !linkedDepartmentIds.has(d.id))
+                      .map((d: Department) => ({ value: d.id, label: d.name, sub: d.code }))}
+                    value={null}
+                    onChange={(value) => value && void addLink('departments', Number(value))}
+                    placeholder="Select a department to link"
+                    searchPlaceholder="Search departments"
+                  />
+                </Field>
+              )}
+            </Card>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

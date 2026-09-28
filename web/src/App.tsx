@@ -21,6 +21,7 @@ import Search from './pages/Search';
 import Profile from './pages/Profile';
 import SyncQueue from './pages/SyncQueue';
 import Admin from './pages/Admin';
+import { NoteCompose, NoteDetail, Notes } from './pages/InspectionNote';
 
 export default function App() {
   const { user, ready } = useAuth();
@@ -52,6 +53,10 @@ export default function App() {
         <Route path="/inspections/new" element={<NewInspection />} />
         <Route path="/inspections" element={<Inspections />} />
         <Route path="/inspections/:id" element={<InspectionDetail />} />
+        <Route path="/inspections/:id/note" element={<NoteCompose />} />
+        <Route path="/notes" element={<Notes />} />
+        <Route path="/notes/new" element={<NoteCompose />} />
+        <Route path="/notes/:id" element={<NoteDetail />} />
         <Route path="/observations" element={<Observations />} />
         <Route path="/observations/:id" element={<ObservationDetail />} />
         <Route path="/compliance" element={<Compliance />} />

@@ -7,6 +7,7 @@ import { authenticate, requireRole, ROLES } from '../middleware/auth.js';
 import { asyncRoute } from '../lib/http.js';
 import { body, query, z, optionalId, optionalText, optionalBool } from '../lib/validate.js';
 import { runReminderSweep } from '../lib/scheduler.js';
+import { toCsv } from '../lib/exporters.js';
 import config from '../config.js';
 
 const router = express.Router();
@@ -33,7 +34,7 @@ const RESOURCES = {
   stations: {
     table: 'stations',
     label: 'Station',
-    columns: ['code', 'name', 'division_id', 'zone_id', 'category', 'station_type', 'platforms', 'latitude', 'longitude', 'active'],
+    columns: ['code', 'name', 'division_id', 'zone_id', 'category', 'station_type', 'section', 'platforms', 'latitude', 'longitude', 'active'],
     order: 'name',
     search: ['code', 'name'],
   },
@@ -76,11 +77,30 @@ const RESOURCES = {
     order: 'name',
     search: ['name', 'employee_id', 'designation'],
   },
+  supervisor_stations: {
+    table: 'supervisor_stations',
+    label: 'Supervisor - station link',
+    columns: ['supervisor_id', 'station_id', 'is_primary', 'section', 'priority', 'active'],
+    order: 'supervisor_id, is_primary DESC, priority',
+  },
+  supervisor_departments: {
+    table: 'supervisor_departments',
+    label: 'Supervisor - department link',
+    columns: ['supervisor_id', 'department_id', 'is_primary', 'priority', 'active'],
+    order: 'supervisor_id, is_primary DESC, priority',
+  },
   supervisor_coverage: {
     table: 'supervisor_coverage',
     label: 'Supervisor coverage',
     columns: ['supervisor_id', 'station_id', 'unit_id', 'unit_kind', 'item_group_id', 'priority', 'active'],
     order: 'priority',
+  },
+  item_deficiencies: {
+    table: 'item_deficiencies',
+    label: 'Suggested deficiency',
+    columns: ['item_id', 'group_id', 'module_id', 'text', 'default_department_id', 'default_severity_id', 'default_category_id', 'suggested_tdc_days', 'sort_order', 'active'],
+    order: 'module_id, group_id, item_id, sort_order',
+    search: ['text'],
   },
   contractors: {
     table: 'contractors',
@@ -248,6 +268,214 @@ router.delete('/masters/:resource/:id', requireRole(ROLES.ADMIN), (req, res) => 
   });
   res.json({ ok: true, deleted: true });
 });
+
+/* -------------------------------------------------------------------------- */
+/* Station list import / export                                               */
+/*                                                                            */
+/* The station master is the one list every division has to replace with its   */
+/* own before the system is used in earnest, and editing thirty-odd stations   */
+/* one at a time is not a reasonable way to do it. Export gives the current    */
+/* list in the exact shape the importer accepts, so the round trip is safe.    */
+/* -------------------------------------------------------------------------- */
+
+const STATION_IMPORT_COLUMNS = ['code', 'name', 'division', 'zone', 'category', 'station_type', 'section', 'platforms', 'latitude', 'longitude', 'active'];
+
+router.get('/stations/export', requireRole(ROLES.ADMIN, ROLES.OFFICER), (_req, res) => {
+  const rows = all(
+    `SELECT s.code, s.name, d.code AS division, z.code AS zone, s.category, s.station_type,
+            s.section, s.platforms, s.latitude, s.longitude, s.active
+       FROM stations s
+       JOIN divisions d ON d.id = s.division_id
+       JOIN zones z ON z.id = s.zone_id
+      ORDER BY s.section, s.name`
+  );
+  res.type('text/csv');
+  res.setHeader('content-disposition', 'attachment; filename="stations.csv"');
+  res.send(toCsv(rows, STATION_IMPORT_COLUMNS.map((key) => ({ key, label: key }))));
+});
+
+/**
+ * Imports stations from CSV. `code` identifies the station: a code already in the
+ * master is updated, a new one is inserted. Nothing is deleted - a station that
+ * has to go is deactivated, because historical observations point at it.
+ *
+ * `dry_run` returns exactly what would change without writing anything, so the
+ * file can be checked before it is applied.
+ */
+router.post(
+  '/stations/import',
+  requireRole(ROLES.ADMIN),
+  body(
+    z.object({
+      csv: z.string().min(10, 'Paste the CSV, including its header row'),
+      dry_run: z.boolean().default(false),
+      deactivate_missing: z.boolean().default(false),
+    })
+  ),
+  (req, res) => {
+    const parsed = parseCsv(req.body.csv);
+    if (!parsed.rows.length) throw badRequest('No data rows found below the header');
+    const missing = ['code', 'name'].filter((c) => !parsed.header.includes(c));
+    if (missing.length) throw badRequest(`The CSV must have a ${missing.join(' and ')} column`);
+
+    const divisions = new Map(all('SELECT id, code FROM divisions').map((d) => [d.code.toUpperCase(), d.id]));
+    const zones = new Map(all('SELECT id, code FROM zones').map((z_) => [z_.code.toUpperCase(), z_.id]));
+    const defaultDivision = get('SELECT value FROM settings WHERE key = ?', ['app.division_default'])?.value;
+
+    const created = [];
+    const updated = [];
+    const skipped = [];
+    const seen = new Set();
+
+    for (const [index, row] of parsed.rows.entries()) {
+      const line = index + 2;
+      const code = String(row.code ?? '').trim().toUpperCase();
+      const name = String(row.name ?? '').trim();
+      if (!code || !name) {
+        skipped.push({ line, code, reason: 'code and name are both required' });
+        continue;
+      }
+      const existing = get('SELECT * FROM stations WHERE upper(code) = ?', [code]);
+      const divisionCode = String(row.division ?? defaultDivision ?? '').trim().toUpperCase();
+      const divisionId = divisions.get(divisionCode) ?? existing?.division_id ?? null;
+      if (!divisionId) {
+        skipped.push({ line, code, reason: `unknown division "${row.division ?? ''}"` });
+        continue;
+      }
+      const zoneCode = String(row.zone ?? '').trim().toUpperCase();
+      const zoneId =
+        zones.get(zoneCode) ??
+        existing?.zone_id ??
+        get('SELECT zone_id FROM divisions WHERE id = ?', [divisionId])?.zone_id ??
+        null;
+      if (!zoneId) {
+        skipped.push({ line, code, reason: `unknown zone "${row.zone ?? ''}"` });
+        continue;
+      }
+
+      const fields = {
+        code,
+        name,
+        division_id: divisionId,
+        zone_id: zoneId,
+        category: blankToNull(row.category) ?? existing?.category ?? null,
+        station_type: blankToNull(row.station_type) ?? existing?.station_type ?? null,
+        section: blankToNull(row.section) ?? existing?.section ?? null,
+        platforms: numberOr(row.platforms, existing?.platforms ?? 0),
+        latitude: row.latitude === undefined || row.latitude === '' ? existing?.latitude ?? null : numberOr(row.latitude, null),
+        longitude: row.longitude === undefined || row.longitude === '' ? existing?.longitude ?? null : numberOr(row.longitude, null),
+        active: row.active === undefined || row.active === '' ? existing?.active ?? 1 : boolFrom(row.active),
+      };
+      seen.add(code);
+
+      if (existing) {
+        if (!req.body.dry_run) update('stations', existing.id, { ...fields, updated_at: nowIso() });
+        updated.push({ line, code, name });
+      } else {
+        if (!req.body.dry_run) insert('stations', fields);
+        created.push({ line, code, name });
+      }
+    }
+
+    const deactivated = [];
+    if (req.body.deactivate_missing) {
+      for (const station of all('SELECT id, code, name FROM stations WHERE active = 1')) {
+        if (seen.has(String(station.code).toUpperCase())) continue;
+        if (!req.body.dry_run) update('stations', station.id, { active: 0, updated_at: nowIso() });
+        deactivated.push({ code: station.code, name: station.name });
+      }
+    }
+
+    if (!req.body.dry_run) {
+      audit(req, {
+        action: 'STATIONS_IMPORTED',
+        entityType: 'stations',
+        next: { created: created.length, updated: updated.length, deactivated: deactivated.length },
+        remarks: `${created.length} added, ${updated.length} updated, ${deactivated.length} deactivated, ${skipped.length} skipped`,
+      });
+    }
+
+    res.json({
+      ok: true,
+      dry_run: req.body.dry_run,
+      counts: {
+        created: created.length,
+        updated: updated.length,
+        deactivated: deactivated.length,
+        skipped: skipped.length,
+      },
+      created,
+      updated,
+      deactivated,
+      skipped,
+      total_after: req.body.dry_run ? null : get('SELECT COUNT(*) AS n FROM stations').n,
+    });
+  }
+);
+
+const blankToNull = (v) => {
+  const s_ = v == null ? '' : String(v).trim();
+  return s_ === '' ? null : s_;
+};
+const numberOr = (v, fallback) => {
+  const n = Number(String(v ?? '').trim());
+  return Number.isFinite(n) ? n : fallback;
+};
+const boolFrom = (v) => (['0', 'false', 'no', 'n', ''].includes(String(v).trim().toLowerCase()) ? 0 : 1);
+
+/**
+ * Minimal RFC-4180 CSV reader: quoted fields, doubled quotes inside them, CRLF or
+ * LF line endings, and a UTF-8 BOM (which is what Excel writes). Enough for a
+ * station list, and one less dependency than a parser library.
+ */
+function parseCsv(text) {
+  const rows = [];
+  let row = [];
+  let field = '';
+  let quoted = false;
+  const body = String(text).replace(/^\uFEFF/, '');
+  for (let i = 0; i < body.length; i += 1) {
+    const ch = body[i];
+    if (quoted) {
+      if (ch === '"') {
+        if (body[i + 1] === '"') {
+          field += '"';
+          i += 1;
+        } else {
+          quoted = false;
+        }
+      } else {
+        field += ch;
+      }
+      continue;
+    }
+    if (ch === '"') {
+      quoted = true;
+    } else if (ch === ',') {
+      row.push(field);
+      field = '';
+    } else if (ch === '\n' || ch === '\r') {
+      if (ch === '\r' && body[i + 1] === '\n') i += 1;
+      row.push(field);
+      field = '';
+      if (row.some((c) => c.trim() !== '')) rows.push(row);
+      row = [];
+    } else {
+      field += ch;
+    }
+  }
+  row.push(field);
+  if (row.some((c) => c.trim() !== '')) rows.push(row);
+  if (rows.length === 0) return { header: [], rows: [] };
+
+  const header = rows[0].map((h) => h.trim().toLowerCase().replace(/\s+/g, '_'));
+  return {
+    header,
+    rows: rows.slice(1).map((cells) =>
+      Object.fromEntries(header.map((key, index) => [key, (cells[index] ?? '').trim()]))
+    ),
+  };
+}
 
 /** Replaces the checklist parameters configured for one inspection item. */
 router.put(

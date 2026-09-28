@@ -92,6 +92,7 @@ export function AppShell({ children }: { children: ReactNode }) {
       items: [
         { to: '/stations', label: 'Station History', icon: 'station' },
         { to: '/trains', label: 'Train Inspection', icon: 'train' },
+        { to: '/notes', label: 'Inspection Notes', icon: 'printer' },
         { to: '/reports', label: 'Reports', icon: 'file' },
         { to: '/dashboard', label: 'Dashboard', icon: 'chart' },
       ],

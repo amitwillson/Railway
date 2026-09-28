@@ -12,20 +12,30 @@ Sign in with any of these (the sign-in screen lists them all), password `Railway
 | `CMI01` | Inspecting officer | New Inspection, repeated-deficiency warning, verification queue |
 | `SSEEL01` | Supervisor | Compliance queue, acknowledge and submit compliance |
 | `SRDCM01` | Divisional officer | Dashboards, station history, reports |
-| `ADMIN01` | Administrator | Admin panel over all 21 masters, audit trail |
+| `ADMIN01` | Administrator | Admin panel over all 24 masters, supervisor links, station import, audit trail |
 
 ## Suggested walkthrough
 
-1. **`CMI01` &rarr; New Inspection.** Type `jabal` in Station, pick Platform No. 2, then Drinking
-   Water. The repeated-deficiency banner appears before you submit, and the concerned supervisor is
+1. **`CMI01` &rarr; New Inspection.** Type `jabal` in Station, pick Platform No. 2, then Water
+   Cooler. The repeated-deficiency banner appears before you submit, and the concerned supervisor is
    filled in with the reason for the match.
-2. Write "Water cooler is not functioning.", set **Action By** to Electrical, switch TDC on, submit.
-3. **Sign out and sign in as `SSEEL01`.** The observation is in the compliance queue and in the
-   notification bell. Acknowledge it, then submit compliance.
-4. **Back as `CMI01`.** Verify it: reject it once (a reason is mandatory) and watch it reopen, then
+2. Open **Suggested deficiency** and pick *Water cooler is not functioning.* &mdash; the wording, the
+   department and the TDC are filled in together. Submit.
+3. **Stay on the screen and record a second one.** Change the Amenity to Toilet, pick a suggestion
+   from its own list, and submit again: one inspection, two observations, with a running list of what
+   has been recorded.
+4. Choose **Inspection note** on that list. Tick the observations to include, adjust the subject and
+   the paragraphs, and issue it &mdash; the letter is numbered in the office series and can be
+   printed straight from the browser.
+5. **Sign out and sign in as `SSEEL01`.** The observations are in the compliance queue and in the
+   notification bell. Acknowledge one, then submit compliance.
+6. **Back as `CMI01`.** Verify it: reject it once (a reason is mandatory) and watch it reopen, then
    accept the next round and see it close with the full timeline.
-5. **`SRDCM01` &rarr; Dashboard** for the module, department and station views, and **Station
-   History** for the previous-vs-current inspection comparison.
+7. **`SRDCM01` &rarr; Dashboard &rarr; Repeated** for the most-reported deficiencies and the
+   recurring ones, and **Station History** for the previous-vs-current inspection comparison.
+8. **`ADMIN01` &rarr; Admin &rarr; Supervisors** to see which stations and departments each
+   supervisor answers for, and **Master data &rarr; Station &rarr; Import** to paste a CSV and press
+   *Check* &mdash; it reports what would change without writing anything.
 
 ## What is real and what is not
 
@@ -36,7 +46,8 @@ dashboards and CSV export all run the same rules as the server.
 Three things need the server and are stated as such in the interface:
 
 * **PDF and Excel reports** &mdash; generated server-side, with photographs, signatures and the
-  verification QR code. CSV export works here.
+  verification QR code. CSV export works here, and an Inspection Note prints from the browser
+  (*Print* &rarr; save as PDF), which produces the same letter the server renders.
 * **Email and SMS delivery** &mdash; in-app notifications are live; the other channels show as
   `skipped`, exactly as they do in a deployment with those channels switched off.
 * **The nightly TDC sweep** &mdash; it can be run on demand from Admin &rarr; System, but nothing

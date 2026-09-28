@@ -33,6 +33,11 @@ interface RepeatRow {
   module_code: string; occurrences: number; open: number; last_seen: string; refs: string[];
 }
 
+interface DeficiencyRow {
+  deficiency_id: number; text: string; item_name: string | null; module_code: string;
+  occurrences: number; open: number; overdue: number; stations: number; last_seen: string;
+}
+
 interface SupervisorRow {
   supervisor_id: number; supervisor_name: string; supervisor_designation: string | null;
   department_name: string; assigned: number; pending: number; overdue: number;
@@ -63,6 +68,7 @@ export default function Dashboard() {
   const [severity, setSeverity] = useState<SeverityRow[]>([]);
   const [trend, setTrend] = useState<TrendPoint[]>([]);
   const [repeats, setRepeats] = useState<RepeatRow[]>([]);
+  const [deficiencies, setDeficiencies] = useState<DeficiencyRow[]>([]);
   const [supervisors, setSupervisors] = useState<SupervisorRow[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -87,8 +93,9 @@ export default function Dashboard() {
       api.get<{ days: number; data: TrendPoint[] }>('/dashboard/trends', { ...f, days: Math.min(Number(days || 90), 90) }),
       api.get<{ data: RepeatRow[] }>('/dashboard/repeats', { ...f, limit: 15 }),
       api.get<{ data: SupervisorRow[] }>('/dashboard/supervisors', f),
+      api.get<{ data: DeficiencyRow[] }>('/dashboard/deficiencies', { ...f, limit: 15 }),
     ])
-      .then(([o, m, d, s, sev, t, r, sup]) => {
+      .then(([o, m, d, s, sev, t, r, sup, def]) => {
         setOverview(o);
         setModulesStat(m.data);
         setDepartments(d.data);
@@ -97,6 +104,7 @@ export default function Dashboard() {
         setTrend(t.data);
         setRepeats(r.data);
         setSupervisors(sup.data);
+        setDeficiencies(def.data);
       })
       .catch(() => {})
       .finally(() => setLoading(false));
@@ -394,6 +402,48 @@ export default function Dashboard() {
       )}
 
       {tab === 'repeats' && (
+        <>
+        <Card
+          title="Most reported deficiencies"
+          subtitle="Counted from the suggestion the inspector picked, so the wording of each report does not matter"
+          icon="list"
+          pad={false}
+        >
+          {deficiencies.length === 0 ? (
+            <div className="card__body">
+              <p className="small muted">
+                Nothing yet. This fills up as observations are raised from the suggested-deficiency list on the New
+                Inspection screen.
+              </p>
+            </div>
+          ) : (
+            <div className="table-wrap">
+              <table className="data">
+                <thead>
+                  <tr>
+                    <th>Deficiency</th><th>Item</th><th>Module</th>
+                    <th className="num">Times</th><th className="num">Open</th>
+                    <th className="num">Overdue</th><th className="num">Stations</th><th>Last seen</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {deficiencies.map((d) => (
+                    <tr key={`${d.deficiency_id}-${d.item_name}`}>
+                      <td className="strong">{d.text}</td>
+                      <td>{d.item_name ?? '-'}</td>
+                      <td><Badge tone="outline">{d.module_code}</Badge></td>
+                      <td className="num strong">{d.occurrences}</td>
+                      <td className="num">{d.open}</td>
+                      <td className="num" style={d.overdue ? { color: 'var(--critical)', fontWeight: 700 } : undefined}>{d.overdue}</td>
+                      <td className="num">{d.stations}</td>
+                      <td className="xsmall">{d.last_seen?.slice(0, 10)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </Card>
         <Card
           title="Repeated deficiencies"
           subtitle="Same amenity or item recurring at the same unit"
@@ -429,6 +479,7 @@ export default function Dashboard() {
             </div>
           )}
         </Card>
+        </>
       )}
 
       {tab === 'supervisors' && (

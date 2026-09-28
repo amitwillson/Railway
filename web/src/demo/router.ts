@@ -12,7 +12,10 @@ import {
   observations, publicUser, table, todayIso, update, uuid, viewInspection,
   viewObservation, where, type Row,
 } from './store';
-import { audit, autoAssign, dispatch, findRepeats, findSupervisors, observationById, timeline } from './engines';
+import {
+  audit, autoAssign, byDepartment, deficienciesForItem, deficiencyFor, dispatch, findRepeats,
+  findSupervisors, letterDefaults, nextNoteNo, noteById, noteObservation, observationById, timeline,
+} from './engines';
 
 export class DemoError extends Error {
   status: number;
@@ -52,13 +55,14 @@ const CAPABILITIES: Record<string, string[]> = {
   divisional_officer: [
     'inspection:read', 'inspection:create', 'inspection:update', 'observation:read',
     'observation:create', 'observation:update', 'observation:verify', 'observation:cancel',
-    'compliance:read', 'dashboard:read', 'report:read', 'master:read', 'supervisor:read',
-    'audit:read', 'notification:read',
+    'compliance:read', 'dashboard:read', 'report:read', 'note:create', 'master:read',
+    'supervisor:read', 'audit:read', 'notification:read',
   ],
   inspector: [
     'inspection:read', 'inspection:create', 'inspection:update', 'observation:read',
     'observation:create', 'observation:update', 'observation:verify', 'compliance:read',
-    'dashboard:read', 'report:read', 'master:read', 'supervisor:read', 'notification:read',
+    'dashboard:read', 'report:read', 'note:create', 'master:read', 'supervisor:read',
+    'notification:read',
   ],
   supervisor: [
     'inspection:read', 'observation:read', 'compliance:read', 'compliance:submit',
@@ -522,6 +526,39 @@ on('GET', '/masters/items/:id', ({ params }) => {
   };
 });
 
+/** Every station and department one supervisor answers for, primary link first. */
+const supervisorLinks = (supervisorId: number) => ({
+  stations: where('supervisor_stations', (l) => l.supervisor_id === supervisorId)
+    .map((l) => {
+      const station = byId('stations', l.station_id);
+      return {
+        id: l.id,
+        station_id: l.station_id,
+        station_name: station?.name ?? null,
+        station_code: station?.code ?? null,
+        is_primary: Boolean(l.is_primary),
+        section: l.section ?? null,
+        priority: l.priority,
+        active: Boolean(l.active),
+      };
+    })
+    .sort((a, b) => Number(b.is_primary) - Number(a.is_primary) || (a.priority ?? 0) - (b.priority ?? 0)),
+  departments: where('supervisor_departments', (l) => l.supervisor_id === supervisorId)
+    .map((l) => {
+      const department = byId('departments', l.department_id);
+      return {
+        id: l.id,
+        department_id: l.department_id,
+        department_name: department?.name ?? null,
+        department_code: department?.code ?? null,
+        is_primary: Boolean(l.is_primary),
+        priority: l.priority,
+        active: Boolean(l.active),
+      };
+    })
+    .sort((a, b) => Number(b.is_primary) - Number(a.is_primary) || (a.priority ?? 0) - (b.priority ?? 0)),
+});
+
 on('GET', '/masters/supervisors', ({ q }) => {
   const term = q.get('q')?.toLowerCase();
   const departmentId = num(q.get('department_id'));
@@ -529,17 +566,39 @@ on('GET', '/masters/supervisors', ({ q }) => {
   return {
     data: where('supervisors', (s) => {
       if (!s.active) return false;
-      if (departmentId !== undefined && s.department_id !== departmentId) return false;
-      if (stationId !== undefined && !(s.station_id === stationId || s.station_id == null)) return false;
+      const links = supervisorLinks(s.id);
+      if (
+        departmentId !== undefined
+        && s.department_id !== departmentId
+        && !links.departments.some((d) => d.active && d.department_id === departmentId)
+      ) return false;
+      if (
+        stationId !== undefined
+        && !(s.station_id === stationId || s.station_id == null)
+        && !links.stations.some((l) => l.active && l.station_id === stationId)
+      ) return false;
       if (term && !(contains(s.name, term) || contains(s.employee_id, term) || contains(s.designation, term))) return false;
       return true;
-    }).map((s) => ({
-      ...s,
-      department_name: byId('departments', s.department_id)?.name,
-      station_name: byId('stations', s.station_id)?.name ?? null,
-      reporting_officer_name: byId('supervisors', s.reporting_officer_id)?.name ?? null,
-    })),
+    }).map((s) => {
+      const links = supervisorLinks(s.id);
+      return {
+        ...s,
+        department_name: byId('departments', s.department_id)?.name,
+        station_name: byId('stations', s.station_id)?.name ?? null,
+        reporting_officer_name: byId('supervisors', s.reporting_officer_id)?.name ?? null,
+        station_count: links.stations.filter((l) => l.active).length,
+        department_count: links.departments.filter((l) => l.active).length,
+        ...links,
+      };
+    }),
   };
+});
+
+/** The "what usually fails" dropdown for one inspection item. */
+on('GET', '/masters/items/:id/deficiencies', ({ params, q }) => {
+  const item = byId('inspection_items', params[0]);
+  if (!item) throw notFound('Inspection item');
+  return deficienciesForItem(item, { stationId: num(q.get('station_id')) ?? null });
 });
 
 on('GET', '/masters/supervisors/resolve', ({ q }) => {
@@ -552,6 +611,26 @@ on('GET', '/masters/supervisors/resolve', ({ q }) => {
     itemId: num(q.get('item_id')),
   });
   return { data: candidates, auto_selected: candidates[0] ?? null, requires_choice: candidates.length > 1 };
+});
+
+on('GET', '/masters/supervisors/:id', ({ params }) => {
+  const supervisor = byId('supervisors', params[0]);
+  if (!supervisor) throw notFound('Supervisor');
+  return {
+    ...supervisor,
+    department_name: byId('departments', supervisor.department_id)?.name,
+    department_code: byId('departments', supervisor.department_id)?.code,
+    station_name: byId('stations', supervisor.station_id)?.name ?? null,
+    station_code: byId('stations', supervisor.station_id)?.code ?? null,
+    reporting_officer_name: byId('supervisors', supervisor.reporting_officer_id)?.name ?? null,
+    ...supervisorLinks(supervisor.id),
+    coverage: where('supervisor_coverage', (c) => c.supervisor_id === supervisor.id && c.active).map((c) => ({
+      ...c,
+      station_name: byId('stations', c.station_id)?.name ?? null,
+      unit_name: byId('units', c.unit_id)?.name ?? null,
+      item_group_name: byId('item_groups', c.item_group_id)?.name ?? null,
+    })),
+  };
 });
 
 on('GET', '/masters/departments', () => ({ data: activeRows('departments') }));
@@ -888,6 +967,9 @@ on('POST', '/observations', ({ body, user }) => {
     unit_name: unitName,
     item_id: body.item_id ?? null,
     item_name: item?.name ?? null,
+    // Which suggested deficiency the inspector picked, if any: it is what the
+    // "most reported deficiencies" figures are counted from.
+    deficiency_id: deficiencyFor(body.deficiency_id, item)?.id ?? null,
     parameters: body.parameters?.length ? JSON.stringify(body.parameters) : null,
     observation: String(body.observation).trim(),
     category_id: categoryId,
@@ -1677,6 +1759,35 @@ on('GET', '/dashboard/repeats', ({ q, user }) => {
   return { window_days: windowDays, data };
 });
 
+/**
+ * Most reported deficiencies. Counted from the suggestion the inspector picked,
+ * so the wording of each individual report does not affect the figures.
+ */
+on('GET', '/dashboard/deficiencies', ({ q, user }) => {
+  const limit = num(q.get('limit')) ?? 15;
+  const rows = filterObservations(q, user).filter((o) => o.deficiency_id);
+  const data = [...groupBy(rows, (o) => `${o.deficiency_id}|${o.item_name ?? ''}`).entries()]
+    .map(([, group]) => {
+      const first = group[0];
+      const suggestion = byId('item_deficiencies', first.deficiency_id);
+      return {
+        deficiency_id: first.deficiency_id,
+        template: suggestion?.text ?? '',
+        text: String(suggestion?.text ?? '').replace(/\{item\}/gi, first.item_name ?? 'the item'),
+        item_name: first.item_name ?? null,
+        module_code: first.module_code,
+        occurrences: group.length,
+        open: group.filter((o) => isOpenStatus(o.status)).length,
+        overdue: group.filter((o) => o.is_overdue).length,
+        stations: new Set(group.map((o) => o.station_id)).size,
+        last_seen: group.map((o) => o.observed_at).sort().at(-1),
+      };
+    })
+    .sort((a, b) => b.occurrences - a.occurrences || b.overdue - a.overdue)
+    .slice(0, limit);
+  return { data };
+});
+
 on('GET', '/dashboard/supervisors', ({ q, user }) => {
   const rows = filterObservations(q, user).filter((o) => o.supervisor_id);
   const data = [...groupBy(rows, (o) => o.supervisor_id).entries()]
@@ -1997,6 +2108,227 @@ on('GET', '/notifications/deliveries', ({ q, user }) => {
   return { data };
 });
 
+/* ---------------------------- inspection notes ---------------------------- */
+
+/**
+ * Several observations compiled into one numbered letter. The wording is stored,
+ * because a note is a record; the status of each observation is read live, so
+ * reopening a note shows where its items now stand.
+ */
+const noteView = (id: number | string) => {
+  const note = noteById(id);
+  if (!note) throw notFound('Inspection note');
+  return { ...note, by_department: byDepartment(note.observations) };
+};
+
+/** "at Jabalpur" for a station, "on Train 12189" for a train. */
+const placeOf = (inspection: Row | undefined, rows: Row[]) => {
+  const station = inspection ? byId('stations', inspection.station_id) : undefined;
+  if (station) return { preposition: 'at', name: station.name as string };
+  const train = inspection ? byId('trains', inspection.train_id) : undefined;
+  if (train) return { preposition: 'on', name: `Train ${train.number}` };
+  const stations = [...new Set(rows.map((o) => o.station_name).filter(Boolean))];
+  if (stations.length) return { preposition: 'at', name: stations.join(', ') };
+  const trains = [...new Set(rows.map((o) => o.train_number).filter(Boolean))];
+  if (trains.length) return { preposition: 'on', name: `Train ${trains.join(', ')}` };
+  return null;
+};
+
+const suggestSubject = (
+  inspection: Row | undefined,
+  rows: Row[],
+  where_: { preposition: string; name: string } | null
+) => {
+  const module = inspection ? byId('modules', inspection.module_id)?.name : rows[0]?.module_name;
+  const type = inspection ? byId('inspection_types', inspection.inspection_type_id)?.name : null;
+  const parts = [`Deficiencies noticed during ${String(module ?? 'commercial').toLowerCase()} inspection`];
+  if (where_) parts.push(`${where_.preposition} ${where_.name}`);
+  const on_ = inspection?.completed_at ?? inspection?.started_at ?? inspection?.created_at;
+  if (on_) parts.push(`on ${String(on_).slice(0, 10)}`);
+  return `${parts.join(' ')}${type ? ` (${type})` : ''}`;
+};
+
+const noteObservationsFor = (inspectionId?: number, ids?: number[]) => {
+  if (inspectionId) {
+    return where('observations', (o) => o.inspection_id === inspectionId && o.status !== 'cancelled')
+      .slice()
+      .sort((a, b) => a.id - b.id)
+      .map((o, index) => noteObservation(o, index + 1));
+  }
+  return (ids ?? [])
+    .map((id) => byId('observations', id))
+    .filter((o): o is Row => Boolean(o))
+    .map((o, index) => noteObservation(o, index + 1));
+};
+
+on('GET', '/notes/draft', ({ q }) => {
+  const inspectionId = num(q.get('inspection_id'));
+  const ids = (q.get('observation_ids') ?? '')
+    .split(',')
+    .map((v) => Number(v.trim()))
+    .filter((v) => Number.isInteger(v) && v > 0);
+  if (!inspectionId && ids.length === 0) throw bad('Give an inspection_id, or observation_ids to compile');
+
+  const inspection = inspectionId ? byId('inspections', inspectionId) : undefined;
+  if (inspectionId && !inspection) throw notFound('Inspection');
+  const rows = noteObservationsFor(inspectionId, ids);
+  const defaults = letterDefaults();
+  return {
+    inspection: inspection ? viewInspection(inspection) : null,
+    observations: rows,
+    note_no: nextNoteNo(defaults.number_prefix),
+    letter_date: todayIso(),
+    subject: suggestSubject(inspection, rows, placeOf(inspection, rows)),
+    ...defaults,
+  };
+});
+
+on('GET', '/notes/defaults', () => letterDefaults());
+
+on('GET', '/notes', ({ q, user }) => {
+  const inspectionId = num(q.get('inspection_id'));
+  const stationId = num(q.get('station_id'));
+  const status = q.get('status');
+  const mine = ['1', 'true'].includes(String(q.get('mine')));
+  const rows = table('inspection_notes')
+    .filter((n) => {
+      if (inspectionId !== undefined && n.inspection_id !== inspectionId) return false;
+      if (stationId !== undefined && n.station_id !== stationId) return false;
+      if (status && n.status !== status) return false;
+      if (mine && n.created_by !== user.id) return false;
+      return true;
+    })
+    .slice()
+    .sort((a, b) => String(b.letter_date).localeCompare(String(a.letter_date)) || b.id - a.id)
+    .map((n) => {
+      const links = where('inspection_note_observations', (l) => l.note_id === n.id);
+      return {
+        ...n,
+        module_code: byId('modules', n.module_id)?.code ?? null,
+        station_name: byId('stations', n.station_id)?.name ?? null,
+        station_code: byId('stations', n.station_id)?.code ?? null,
+        train_number: byId('trains', n.train_id)?.number ?? null,
+        inspection_ref: byId('inspections', n.inspection_id)?.ref_no ?? null,
+        created_by_name: byId('users', n.created_by)?.name ?? 'Unknown',
+        observation_count: links.length,
+        closed_count: links.filter((l) => byId('observations', l.observation_id)?.status === 'closed').length,
+      };
+    });
+  return { data: rows, total: rows.length };
+});
+
+on('GET', '/notes/:id', ({ params }) => noteView(params[0]));
+
+on('POST', '/notes', ({ body, user }) => {
+  require_(user, 'note:create');
+  const inspectionId = body?.inspection_id ? Number(body.inspection_id) : undefined;
+  const inspection = inspectionId ? byId('inspections', inspectionId) : undefined;
+  if (inspectionId && !inspection) throw notFound('Inspection');
+  const rows = noteObservationsFor(inspectionId, body?.observation_ids);
+  if (rows.length === 0) {
+    throw bad('A note needs at least one observation. Nothing was found for this selection.');
+  }
+  const defaults = letterDefaults();
+  const issued = body?.status === 'issued';
+  const note = insert('inspection_notes', {
+    note_no: String(body?.note_no ?? '').trim() || nextNoteNo(defaults.number_prefix),
+    inspection_id: inspectionId ?? null,
+    module_id: inspection?.module_id ?? rows[0]?.module_id ?? null,
+    station_id: inspection?.station_id ?? rows[0]?.station_id ?? null,
+    train_id: inspection?.train_id ?? rows[0]?.train_id ?? null,
+    letter_date: body?.letter_date ?? todayIso(),
+    subject: String(body?.subject ?? '').trim() || suggestSubject(inspection, rows, placeOf(inspection, rows)),
+    addressee: body?.addressee ?? defaults.addressee,
+    salutation: body?.salutation ?? defaults.salutation,
+    preamble: body?.preamble ?? defaults.preamble,
+    closing: body?.closing ?? defaults.closing,
+    copy_to: body?.copy_to ?? defaults.copy_to,
+    signatory_name: body?.signatory_name ?? user.name,
+    signatory_designation: body?.signatory_designation ?? user.designation ?? null,
+    office: body?.office ?? defaults.office,
+    letterhead: body?.letterhead ?? defaults.letterhead,
+    status: issued ? 'issued' : 'draft',
+    qr_token: uuid().replace(/-/g, '').slice(0, 24),
+    created_by: user.id,
+    issued_at: issued ? nowIso() : null,
+    created_at: nowIso(),
+    updated_at: null,
+  });
+  rows.forEach((o, index) => {
+    insert('inspection_note_observations', {
+      note_id: note.id,
+      observation_id: o.id,
+      sl_no: index + 1,
+      remarks: body?.remarks?.[String(o.id)] ?? null,
+    });
+  });
+  audit({
+    action: issued ? 'NOTE_ISSUED' : 'NOTE_CREATED',
+    entityType: 'inspection_note',
+    entityId: note.id,
+    user,
+    next: note,
+    remarks: `${note.note_no} - ${rows.length} observation(s)`,
+  });
+  return noteView(note.id);
+});
+
+on('PATCH', '/notes/:id', ({ params, body, user }) => {
+  require_(user, 'note:create');
+  const note = byId('inspection_notes', params[0]);
+  if (!note) throw notFound('Inspection note');
+  if (note.status === 'issued' && body?.status !== 'cancelled') {
+    throw bad('This note has been issued. Cancel it and raise a fresh note instead of rewording it.');
+  }
+  const previous = { ...note };
+  for (const key of [
+    'subject', 'addressee', 'salutation', 'preamble', 'closing', 'copy_to',
+    'signatory_name', 'signatory_designation', 'office', 'letterhead', 'status',
+  ]) {
+    if (body?.[key] !== undefined) note[key] = body[key];
+  }
+  if (body?.status === 'issued' && previous.status !== 'issued') note.issued_at = nowIso();
+  note.updated_at = nowIso();
+  audit({
+    action: body?.status === 'issued' ? 'NOTE_ISSUED' : 'NOTE_UPDATED',
+    entityType: 'inspection_note',
+    entityId: note.id,
+    user,
+    previous,
+    next: note,
+  });
+  return noteView(note.id);
+});
+
+on('GET', '/notes/verify/:token', ({ params }) => {
+  const note = table('inspection_notes').find((n) => n.qr_token === params[0]);
+  if (!note) throw notFound('Inspection note');
+  const full = noteById(note.id)!;
+  return {
+    verified: true,
+    note_no: full.note_no,
+    letter_date: full.letter_date,
+    subject: full.subject,
+    status: full.status,
+    issued_at: full.issued_at,
+    station: full.station_name,
+    train: full.train_number,
+    inspection_ref: full.inspection_ref,
+    signed_by: { name: full.signatory_name, designation: full.signatory_designation },
+    observations: full.observations.map((o: Row) => ({
+      sl_no: o.sl_no, ref_no: o.ref_no, item: o.item_name, unit: o.unit_name,
+      action_by: o.department_name, tdc: o.tdc, status: o.status,
+    })),
+  };
+});
+
+/**
+ * The PDF is produced by the server in the deployed application. In this build
+ * the note prints from the browser, which is why the screen shows a Print
+ * button rather than a download; the JSON form is served so nothing 404s.
+ */
+on('GET', '/notes/:id/print', ({ params }) => noteView(params[0]));
+
 /* -------------------------------- reports --------------------------------- */
 
 const REPORT_CATALOGUE = [
@@ -2261,7 +2593,7 @@ const RESOURCES: Record<string, { table: string; label: string; columns: string[
   zones: { table: 'zones', label: 'Zone', columns: ['code', 'name', 'active'] },
   divisions: { table: 'divisions', label: 'Division', columns: ['code', 'name', 'zone_id', 'active'] },
   departments: { table: 'departments', label: 'Department', columns: ['code', 'name', 'is_external', 'sort_order', 'active'] },
-  stations: { table: 'stations', label: 'Station', columns: ['code', 'name', 'division_id', 'zone_id', 'category', 'station_type', 'platforms', 'latitude', 'longitude', 'active'], search: ['code', 'name'] },
+  stations: { table: 'stations', label: 'Station', columns: ['code', 'name', 'division_id', 'zone_id', 'category', 'station_type', 'section', 'platforms', 'latitude', 'longitude', 'active'], search: ['code', 'name'] },
   trains: { table: 'trains', label: 'Train', columns: ['number', 'name', 'origin_code', 'origin', 'destination_code', 'destination', 'train_type', 'has_pantry', 'active'], search: ['number', 'name'] },
   units: { table: 'units', label: 'Unit / Area', columns: ['name', 'applies_to', 'station_id', 'kind', 'sort_order', 'active'], search: ['name'] },
   modules: { table: 'modules', label: 'Module', columns: ['code', 'name', 'tagline', 'description', 'accent', 'sort_order', 'active'] },
@@ -2272,7 +2604,10 @@ const RESOURCES: Record<string, { table: string; label: string; columns: string[
   observation_categories: { table: 'observation_categories', label: 'Observation category', columns: ['name', 'sort_order', 'active'] },
   severities: { table: 'severities', label: 'Severity', columns: ['name', 'definition', 'rank', 'default_tdc_days', 'notify_immediately', 'escalate_immediately', 'accent', 'active'] },
   supervisors: { table: 'supervisors', label: 'Supervisor', columns: ['employee_id', 'name', 'designation', 'department_id', 'sub_department', 'station_id', 'section', 'area_of_responsibility', 'mobile', 'email', 'reporting_officer_id', 'user_id', 'is_default_for_department', 'active'], search: ['name', 'employee_id', 'designation'] },
+  supervisor_stations: { table: 'supervisor_stations', label: 'Supervisor - station link', columns: ['supervisor_id', 'station_id', 'is_primary', 'section', 'priority', 'active'] },
+  supervisor_departments: { table: 'supervisor_departments', label: 'Supervisor - department link', columns: ['supervisor_id', 'department_id', 'is_primary', 'priority', 'active'] },
   supervisor_coverage: { table: 'supervisor_coverage', label: 'Supervisor coverage', columns: ['supervisor_id', 'station_id', 'unit_id', 'unit_kind', 'item_group_id', 'priority', 'active'] },
+  item_deficiencies: { table: 'item_deficiencies', label: 'Suggested deficiency', columns: ['item_id', 'group_id', 'module_id', 'text', 'default_department_id', 'default_severity_id', 'default_category_id', 'suggested_tdc_days', 'sort_order', 'active'], search: ['text'] },
   contractors: { table: 'contractors', label: 'Contractor / Licensee', columns: ['name', 'party_type', 'contract_ref', 'scope', 'station_id', 'department_id', 'contact_person', 'mobile', 'email', 'valid_from', 'valid_to', 'security_deposit', 'licence_fee', 'active'], search: ['name', 'contract_ref'] },
   rule_references: { table: 'rule_references', label: 'Rule / instruction', columns: ['code', 'title', 'authority', 'reference_no', 'issued_on', 'url', 'notes', 'active'], search: ['code', 'title'] },
   tdc_rules: { table: 'tdc_rules', label: 'TDC rule', columns: ['name', 'severity_id', 'remind_before_days', 'remind_on_due_date', 'overdue_repeat_days', 'escalate_after_days', 'escalate_to_role', 'active'] },
@@ -2358,6 +2693,157 @@ on('DELETE', '/admin/masters/:resource/:id', ({ params, user }) => {
   list.splice(list.findIndex((r) => r.id === row.id), 1);
   audit({ action: 'MASTER_DELETE', entityType: params[0]!, entityId: row.id, user, previous: row });
   return { ok: true, deleted: true };
+});
+
+/**
+ * Station list import, with the same contract as the server: identified by code,
+ * a dry run writes nothing, and a station left out is deactivated rather than
+ * deleted so that past observations still resolve.
+ */
+const parseCsv = (text: string) => {
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let field = '';
+  let quoted = false;
+  const body = String(text).replace(/^\uFEFF/, '');
+  for (let i = 0; i < body.length; i += 1) {
+    const ch = body[i];
+    if (quoted) {
+      if (ch === '"') {
+        if (body[i + 1] === '"') {
+          field += '"';
+          i += 1;
+        } else {
+          quoted = false;
+        }
+      } else {
+        field += ch;
+      }
+      continue;
+    }
+    if (ch === '"') quoted = true;
+    else if (ch === ',') {
+      row.push(field);
+      field = '';
+    } else if (ch === '\n' || ch === '\r') {
+      if (ch === '\r' && body[i + 1] === '\n') i += 1;
+      row.push(field);
+      field = '';
+      if (row.some((c) => c.trim() !== '')) rows.push(row);
+      row = [];
+    } else field += ch;
+  }
+  row.push(field);
+  if (row.some((c) => c.trim() !== '')) rows.push(row);
+  if (rows.length === 0) return { header: [] as string[], rows: [] as Row[] };
+  const header = rows[0].map((h) => h.trim().toLowerCase().replace(/\s+/g, '_'));
+  return {
+    header,
+    rows: rows.slice(1).map((cells) =>
+      Object.fromEntries(header.map((key, index) => [key, (cells[index] ?? '').trim()]))
+    ) as Row[],
+  };
+};
+
+on('POST', '/admin/stations/import', ({ body, user }) => {
+  if (!isAdmin(user)) throw forbidden('This action is restricted to: admin');
+  const csv = String(body?.csv ?? '');
+  if (csv.trim().length < 10) throw bad('Paste the CSV, including its header row');
+  const parsed = parseCsv(csv);
+  if (!parsed.rows.length) throw bad('No data rows found below the header');
+  const missing = ['code', 'name'].filter((c) => !parsed.header.includes(c));
+  if (missing.length) throw bad(`The CSV must have a ${missing.join(' and ')} column`);
+
+  const dryRun = Boolean(body?.dry_run);
+  const created: Row[] = [];
+  const updated: Row[] = [];
+  const skipped: Row[] = [];
+  const deactivated: Row[] = [];
+  const seen = new Set<string>();
+  const defaultDivision = table('settings').find((r) => r.key === 'app.division_default')?.value;
+
+  parsed.rows.forEach((row, index) => {
+    const line = index + 2;
+    const code = String(row.code ?? '').trim().toUpperCase();
+    const name = String(row.name ?? '').trim();
+    if (!code || !name) {
+      skipped.push({ line, code, reason: 'code and name are both required' });
+      return;
+    }
+    const existing = table('stations').find((st) => String(st.code).toUpperCase() === code);
+    const divisionCode = String(row.division ?? defaultDivision ?? '').trim().toUpperCase();
+    const division = table('divisions').find((d) => String(d.code).toUpperCase() === divisionCode);
+    const divisionId = division?.id ?? existing?.division_id ?? null;
+    if (!divisionId) {
+      skipped.push({ line, code, reason: `unknown division "${row.division ?? ''}"` });
+      return;
+    }
+    const zoneCode = String(row.zone ?? '').trim().toUpperCase();
+    const zone = table('zones').find((z_) => String(z_.code).toUpperCase() === zoneCode);
+    const zoneId = zone?.id ?? existing?.zone_id ?? byId('divisions', divisionId)?.zone_id ?? null;
+    if (!zoneId) {
+      skipped.push({ line, code, reason: `unknown zone "${row.zone ?? ''}"` });
+      return;
+    }
+    const blank = (v: unknown) => (String(v ?? '').trim() === '' ? null : String(v).trim());
+    const numberOr = (v: unknown, fallback: number | null) => {
+      const n = Number(String(v ?? '').trim());
+      return Number.isFinite(n) ? n : fallback;
+    };
+    const fields = {
+      code,
+      name,
+      division_id: divisionId,
+      zone_id: zoneId,
+      category: blank(row.category) ?? existing?.category ?? null,
+      station_type: blank(row.station_type) ?? existing?.station_type ?? null,
+      section: blank(row.section) ?? existing?.section ?? null,
+      platforms: numberOr(row.platforms, existing?.platforms ?? 0),
+      latitude: blank(row.latitude) === null ? existing?.latitude ?? null : numberOr(row.latitude, null),
+      longitude: blank(row.longitude) === null ? existing?.longitude ?? null : numberOr(row.longitude, null),
+      active: blank(row.active) === null
+        ? existing?.active ?? 1
+        : ['0', 'false', 'no', 'n'].includes(String(row.active).toLowerCase()) ? 0 : 1,
+    };
+    seen.add(code);
+    if (existing) {
+      if (!dryRun) update('stations', existing.id, { ...fields, updated_at: nowIso() });
+      updated.push({ line, code, name });
+    } else {
+      if (!dryRun) insert('stations', fields);
+      created.push({ line, code, name });
+    }
+  });
+
+  if (body?.deactivate_missing) {
+    for (const station of table('stations').filter((st) => st.active)) {
+      if (seen.has(String(station.code).toUpperCase())) continue;
+      if (!dryRun) update('stations', station.id, { active: 0, updated_at: nowIso() });
+      deactivated.push({ code: station.code, name: station.name });
+    }
+  }
+
+  if (!dryRun) {
+    audit({
+      action: 'STATIONS_IMPORTED',
+      entityType: 'stations',
+      entityId: null,
+      user,
+      next: { created: created.length, updated: updated.length, deactivated: deactivated.length },
+      remarks: `${created.length} added, ${updated.length} updated, ${deactivated.length} deactivated, ${skipped.length} skipped`,
+    });
+  }
+
+  return {
+    ok: true,
+    dry_run: dryRun,
+    counts: {
+      created: created.length, updated: updated.length,
+      deactivated: deactivated.length, skipped: skipped.length,
+    },
+    created, updated, deactivated, skipped,
+    total_after: dryRun ? null : table('stations').length,
+  };
 });
 
 on('PUT', '/admin/items/:id/parameters', ({ params, body, user }) => {

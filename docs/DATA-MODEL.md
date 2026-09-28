@@ -9,7 +9,7 @@ ISO-8601 UTC strings; plain dates are `YYYY-MM-DD`. Foreign keys are enforced.
 | --- | --- |
 | `zones`, `divisions` | Railway organisation |
 | `departments` | The "Action By" list, including external parties (contractor, licensee, vendor) |
-| `stations` | Code, name, division, zone, category, type, platforms, coordinates |
+| `stations` | Code, name, division, zone, category, type, **section**, platforms, coordinates. Replaceable in one step from CSV (Admin &rarr; Stations &rarr; Import) |
 | `trains` | Number, name, origin, destination, type, pantry |
 | `units` | Units and areas. `station_id IS NULL` makes the unit a template available at every station; `applies_to` separates station areas from train areas |
 
@@ -21,6 +21,8 @@ ISO-8601 UTC strings; plain dates are `YYYY-MM-DD`. Foreign keys are enforced.
 | `sessions` | One row per sign-in, so sessions can time out and be revoked centrally |
 | `otp_codes` | Hashed one-time passwords with expiry and attempt count |
 | `supervisors` | **Concerned Supervisor Master**: employee ID, designation, department, sub-department, station, section, area of responsibility, mobile, email, reporting officer, linked user |
+| `supervisor_stations` | **Which stations a supervisor answers for.** The primary posting is one of these rows (`is_primary = 1`); the rest are the section they cover, which is how one SSE reaches every station on it |
+| `supervisor_departments` | **Which departments a supervisor answers for.** Same shape: the department on the supervisor row is the primary link, further links let a Station Manager answer for Commercial and Operating alike |
 | `supervisor_coverage` | Explicit responsibility: supervisor × station × unit (or unit kind, or item group) with a priority. Read first by the assignment engine |
 | `audit_log` | User, role, action, entity, previous value, new value, IP, user agent, timestamp |
 
@@ -34,6 +36,7 @@ ISO-8601 UTC strings; plain dates are `YYYY-MM-DD`. Foreign keys are enforced.
 | `inspection_items` | The amenity, service or inspection item, with its default department, category, severity and rule reference |
 | `item_parameters` | Available, Functional, Clean, Adequate, Accessible, Properly displayed, Properly maintained, Safe for passenger use, Requires repair, Requires replacement, Not available, Not functional, Not applicable |
 | `item_parameter_map` | Which parameters apply to which item (administrator configurable) |
+| `item_deficiencies` | **Suggested deficiencies** - the "what usually fails" dropdown. Each row is scoped by the narrowest of `item_id`, `group_id` and `module_id` that is set; all three `NULL` makes it generic, and `{item}` in the text is replaced with the item's name when it is served. A suggestion may carry its own department, severity, category and TDC window |
 | `observation_categories`, `severities` | Observation classification; severity carries its definition, default TDC window and whether it notifies or escalates immediately |
 | `rule_references` | Railway Board and zonal instructions, for rule linking |
 | `contractors` | Contractors, licensees and vendors with contract reference and validity |
@@ -52,7 +55,7 @@ ISO-8601 UTC strings; plain dates are `YYYY-MM-DD`. Foreign keys are enforced.
 | Table | Purpose |
 | --- | --- |
 | `inspections` | Reference number, module, type, location, inspector, status, summary, QR token, `client_uuid` for offline idempotency |
-| `observations` | The core record. Denormalised `unit_name` and `item_name` snapshots keep history readable after a master is renamed |
+| `observations` | The core record. Denormalised `unit_name` and `item_name` snapshots keep history readable after a master is renamed; `deficiency_id` records which suggestion the inspector started from, which is what makes "most reported deficiencies" a count rather than a text match. An inspection carries as many observations as the inspection found |
 | `attachments` | Photographs, video, documents and signatures, tagged by phase (observation, compliance, verification) |
 | `compliances` | One row per compliance round, with its verification outcome, so nothing is overwritten |
 | `observation_events` | The immutable timeline: action, from status, to status, actor, remarks |
@@ -60,6 +63,8 @@ ISO-8601 UTC strings; plain dates are `YYYY-MM-DD`. Foreign keys are enforced.
 | `notifications`, `notification_deliveries` | The message and one row per channel attempt with its status |
 | `reminder_log` | Guard table: unique on (observation, kind, level, date), which makes the daily sweep idempotent |
 | `report_tokens` | QR verification tokens for generated reports |
+| `inspection_notes` | **The letter.** Number, date, subject, addressee, the standing paragraphs, signatory and copy-to, with its own verification token. Stored rather than rendered on demand, because a note is a record: its wording is fixed once issued |
+| `inspection_note_observations` | Which observations a note compiles, and in what order they are numbered |
 
 ## Derived fields
 

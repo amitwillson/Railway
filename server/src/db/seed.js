@@ -22,6 +22,9 @@ import {
   severities, tdcRules, escalationLevels, notificationRules, settings, ruleReferences,
 } from './data/masters.js';
 import { catalogue, parameterProfiles, profileForGroup } from './data/catalogue.js';
+import {
+  genericDeficiencies, moduleDeficiencies, groupDeficiencies, specificDeficiencies,
+} from './data/deficiencies.js';
 import { users, supervisors, reportingChain, contractors } from './data/people.js';
 
 const RESET = process.argv.includes('--reset');
@@ -131,7 +134,9 @@ function resetDatabase() {
     'reminder_log', 'notification_deliveries', 'notifications', 'report_tokens',
     'approvals', 'observation_events', 'attachments', 'compliances', 'observations',
     'inspections', 'item_parameter_map', 'inspection_items', 'item_groups',
-    'supervisor_coverage', 'supervisors', 'otp_codes', 'sessions', 'audit_log',
+    'supervisor_coverage', 'supervisor_stations', 'supervisor_departments',
+    'inspection_note_observations', 'inspection_notes', 'item_deficiencies',
+    'supervisors', 'otp_codes', 'sessions', 'audit_log',
     'contractors', 'rule_references', 'notification_rules', 'escalation_levels',
     'tdc_rules', 'settings', 'severities', 'observation_categories', 'item_parameters',
     'inspection_types', 'modules', 'units', 'trains', 'stations', 'users',
@@ -261,6 +266,7 @@ function seedCatalogue(ref) {
   let itemCount = 0;
   let mapCount = 0;
   const itemIds = new Map();
+  const groupIds = new Map();
 
   for (const [moduleCode, groups] of Object.entries(catalogue)) {
     const moduleId = ref.moduleIds.get(moduleCode);
@@ -270,6 +276,7 @@ function seedCatalogue(ref) {
         name: group.group,
         sort_order: (groupIndex + 1) * 10,
       });
+      groupIds.set(`${moduleCode}|${group.group}`, groupId);
       groupCount += 1;
       const profile = parameterProfiles[profileForGroup(moduleCode, group.group)];
 
@@ -326,7 +333,60 @@ function seedCatalogue(ref) {
   }
 
   log(`  catalogue: ${groupCount} groups, ${itemCount} inspection items, ${mapCount} parameter mappings`);
-  return itemIds;
+  return { itemIds, groupIds };
+}
+
+/**
+ * Suggested deficiencies - the dropdown of common failures under the observation
+ * box. A suggestion is scoped to one item, to a group, to a module, or to
+ * everything; the narrowest scope is offered first.
+ */
+function seedDeficiencies(ref, itemIds, groupIds) {
+  let count = 0;
+  const add = (scope, row) => {
+    const exists = get(
+      `SELECT 1 FROM item_deficiencies
+        WHERE text = ? AND IFNULL(item_id,0) = IFNULL(?,0)
+          AND IFNULL(group_id,0) = IFNULL(?,0) AND IFNULL(module_id,0) = IFNULL(?,0)`,
+      [row.text, scope.item_id ?? null, scope.group_id ?? null, scope.module_id ?? null]
+    );
+    if (exists) return;
+    insert('item_deficiencies', {
+      item_id: scope.item_id ?? null,
+      group_id: scope.group_id ?? null,
+      module_id: scope.module_id ?? null,
+      text: row.text,
+      default_department_id: row.dept ? ref.deptIds.get(row.dept) ?? null : null,
+      default_severity_id: row.severity ? ref.severityIds.get(row.severity) ?? null : null,
+      default_category_id: row.category ? ref.categoryIds.get(row.category) ?? null : null,
+      suggested_tdc_days: row.tdc ?? null,
+      sort_order: row.sort_order ?? 100,
+      active: 1,
+    });
+    count += 1;
+  };
+
+  genericDeficiencies.forEach((d) => add({}, d));
+  moduleDeficiencies.forEach((d) => add({ module_id: ref.moduleIds.get(d.module) ?? null }, d));
+  for (const block of groupDeficiencies) {
+    const groupId = groupIds.get(`${block.module}|${block.group}`);
+    if (!groupId) {
+      log(`  ! deficiency group not found: ${block.module} / ${block.group}`);
+      continue;
+    }
+    block.items.forEach((d, index) => add({ group_id: groupId }, { ...d, sort_order: (index + 1) * 10 }));
+  }
+  for (const block of specificDeficiencies) {
+    const itemId = itemIds.get(`${block.module}|${block.item}`);
+    if (!itemId) {
+      log(`  ! deficiency item not found: ${block.module} / ${block.item}`);
+      continue;
+    }
+    block.items.forEach((d, index) => add({ item_id: itemId }, { ...d, sort_order: (index + 1) * 10 }));
+  }
+
+  log(`  deficiency suggestions: ${count} added`);
+  return count;
 }
 
 function seedPeople(ref) {
@@ -421,6 +481,70 @@ function seedPeople(ref) {
     }
   }
 
+  // Station and department links. The primary posting is stored as a link too
+  // (is_primary = 1) so that one query answers "who covers this station?".
+  let linkCount = 0;
+  const link = (table, keyColumn, row) => {
+    const exists = get(
+      `SELECT 1 FROM ${table} WHERE supervisor_id = ? AND ${keyColumn} = ?`,
+      [row.supervisor_id, row[keyColumn]]
+    );
+    if (!exists) {
+      insert(table, row);
+      linkCount += 1;
+    }
+  };
+  for (const s of supervisors) {
+    const supervisorId = supervisorIds.get(s.employee_id);
+    if (!supervisorId) continue;
+
+    const primaryStation = s.station ? ref.stationIds.get(s.station) : null;
+    if (primaryStation) {
+      link('supervisor_stations', 'station_id', {
+        supervisor_id: supervisorId,
+        station_id: primaryStation,
+        is_primary: 1,
+        section: s.section ?? null,
+        priority: 10,
+        active: 1,
+      });
+    }
+    for (const code of s.stations ?? []) {
+      const stationId = ref.stationIds.get(code);
+      if (!stationId || stationId === primaryStation) continue;
+      link('supervisor_stations', 'station_id', {
+        supervisor_id: supervisorId,
+        station_id: stationId,
+        is_primary: 0,
+        section: s.section ?? null,
+        priority: 50,
+        active: 1,
+      });
+    }
+
+    const primaryDepartment = ref.deptIds.get(s.department);
+    if (primaryDepartment) {
+      link('supervisor_departments', 'department_id', {
+        supervisor_id: supervisorId,
+        department_id: primaryDepartment,
+        is_primary: 1,
+        priority: 10,
+        active: 1,
+      });
+    }
+    for (const code of s.departments ?? []) {
+      const departmentId = ref.deptIds.get(code);
+      if (!departmentId || departmentId === primaryDepartment) continue;
+      link('supervisor_departments', 'department_id', {
+        supervisor_id: supervisorId,
+        department_id: departmentId,
+        is_primary: 0,
+        priority: 50,
+        active: 1,
+      });
+    }
+  }
+
   for (const c of contractors) {
     const { station, department, ...rest } = c;
     upsert('contractors', ['name', 'contract_ref'], {
@@ -432,7 +556,8 @@ function seedPeople(ref) {
 
   log(
     `  people: ${userIds.size} user accounts, ${supervisorIds.size} supervisors, ` +
-      `${coverageCount} coverage mappings, ${contractors.length} contractors/licensees`
+      `${linkCount} station/department links, ${coverageCount} coverage mappings, ` +
+      `${contractors.length} contractors/licensees`
   );
   return { userIds, supervisorIds };
 }
@@ -467,6 +592,7 @@ const demoInspections = [
         unit: 'Platform No. 2',
         item: 'Drinking Water',
         text: 'Water cooler is not functioning. Passengers on Platform No. 2 are without cold drinking water since morning.',
+        deficiency: 'Drinking water not available at this location',
         dept: 'ELEC',
         severity: 'Major',
         category: 'Passenger Amenity',
@@ -480,6 +606,7 @@ const demoInspections = [
         unit: 'Platform No. 4',
         item: 'Toilet',
         text: 'Gents toilet on Platform No. 4 is not cleaned since last evening, foul smell and water not available in the flushing tank.',
+        deficiency: 'Toilet found in unhygienic condition; cleaning not done',
         dept: 'ENGG',
         severity: 'Major',
         category: 'Cleanliness',
@@ -492,6 +619,7 @@ const demoInspections = [
         unit: 'Platform No. 1',
         item: 'Coach Guidance',
         text: 'Coach guidance display at the middle of Platform No. 1 is blank. Passengers are unable to locate coach positions for train 12189.',
+        deficiency: 'Coach guidance display not working at this platform',
         dept: 'SNT',
         severity: 'Major',
         category: 'Passenger Information',
@@ -503,6 +631,7 @@ const demoInspections = [
         unit: 'Circulating Area',
         item: 'Dustbin',
         text: 'Two dustbins in the circulating area are broken and need replacement. No TDC fixed, to be attended during routine upkeep.',
+        deficiency: 'Dustbins not provided at the prescribed interval',
         dept: 'ENGG',
         severity: 'Minor',
         category: 'Cleanliness',
@@ -525,6 +654,7 @@ const demoInspections = [
         unit: 'Platform No. 2',
         item: 'Drinking Water',
         text: 'Water cooler on Platform No. 2 found not working. Cooling unit tripped.',
+        deficiency: 'Drinking water not available at this location',
         dept: 'ELEC',
         severity: 'Major',
         category: 'Passenger Amenity',
@@ -543,6 +673,7 @@ const demoInspections = [
         unit: 'Waiting Hall',
         item: 'Fan',
         text: 'Two ceiling fans in the upper class waiting hall are not working.',
+        deficiency: 'Fans not working at this location',
         dept: 'ELEC',
         severity: 'Moderate',
         category: 'Passenger Amenity',
@@ -571,6 +702,7 @@ const demoInspections = [
         unit: 'Platform No. 2',
         item: 'Drinking Water',
         text: 'Water cooler at Platform No. 2 is again not functioning. Water tap adjacent to it is also leaking.',
+        deficiency: 'Drinking water not available at this location',
         dept: 'ELEC',
         severity: 'Major',
         category: 'Passenger Amenity',
@@ -595,6 +727,7 @@ const demoInspections = [
         unit: 'Platform No. 6',
         item: 'Platform Shelter',
         text: 'Platform shelter sheets over the rear portion of Platform No. 6 are damaged, rain water enters the seating area.',
+        deficiency: 'Shelter sheets damaged; water dripping during rain',
         dept: 'ENGG',
         severity: 'Moderate',
         category: 'Passenger Amenity',
@@ -619,6 +752,7 @@ const demoInspections = [
         unit: 'Catering Area',
         item: 'Overcharging',
         text: 'Tea stall on Platform No. 1 was charging Rs. 15 against the approved rate of Rs. 10 for a cup of tea. No rate list was displayed at the counter.',
+        deficiency: 'Overcharging detected; excess amount refunded to the passenger',
         dept: 'COM',
         severity: 'Major',
         category: 'Revenue',
@@ -636,6 +770,7 @@ const demoInspections = [
         unit: 'Catering Area',
         item: 'Licence Validity',
         text: 'Licence of the milk stall on Platform No. 3 expired last month. The unit is still working without a valid licence.',
+        deficiency: 'Licence has expired; renewal not on record',
         dept: 'COM',
         severity: 'Major',
         category: 'Licensing',
@@ -657,6 +792,7 @@ const demoInspections = [
         unit: 'Parking Area',
         item: 'Parking Contract',
         text: 'Parking contractor is not issuing printed receipts to two-wheeler users and the approved rate board is not displayed at the entry gate.',
+        deficiency: 'Printed receipt not issued to the vehicle owner',
         dept: 'COM',
         severity: 'Moderate',
         category: 'Contract',
@@ -692,6 +828,7 @@ const demoInspections = [
         unit: 'Platform No. 3',
         item: 'Unauthorised vending near coach doors',
         text: 'Four unauthorised vendors were selling eatables right at the coach doors of train 11265 while passengers were boarding, obstructing entry and creating a risk of passengers falling.',
+        deficiency: 'Unauthorised vendors operating at the coach doors during boarding',
         dept: 'RPF',
         severity: 'Critical',
         category: 'Safe Running - Commercial',
@@ -703,6 +840,7 @@ const demoInspections = [
         unit: 'Platform No. 3',
         item: 'Obstruction near coach doors',
         text: 'Trolleys of the catering licensee were parked in front of coach S-4 door area during boarding time.',
+        deficiency: 'Material kept near the coach door obstructing boarding',
         dept: 'COM',
         severity: 'Major',
         category: 'Safe Running - Commercial',
@@ -747,6 +885,7 @@ const demoInspections = [
         coach: 'S-5',
         item: 'Obstruction of gangway',
         text: 'Unbooked luggage of a vendor was kept in the gangway of coach S-5, obstructing passenger movement and emergency access.',
+        deficiency: 'Gangway / emergency access obstructed by material',
         dept: 'COM',
         severity: 'Critical',
         category: 'Safe Running - Commercial',
@@ -762,8 +901,9 @@ const demoInspections = [
       {
         unit: 'Pantry Car',
         coach: 'PC',
-        item: 'Rate List',
+        item: 'Non-compliance with commercial instructions',
         text: 'Approved rate list was not displayed in the pantry car and one staff member was without uniform and identity card.',
+        deficiency: 'Commercial instructions not being followed by the staff on duty',
         dept: 'COM',
         severity: 'Major',
         category: 'Catering',
@@ -798,6 +938,7 @@ const demoInspections = [
         unit: 'Platform No. 2',
         item: 'Lighting',
         text: 'Six light fittings on the Varanasi end of Platform No. 2 are not working. The area remains dark during night train arrivals.',
+        deficiency: 'Lights not working at this location',
         dept: 'ELEC',
         severity: 'Major',
         category: 'Passenger Amenity',
@@ -823,6 +964,7 @@ const demoInspections = [
         unit: 'Pay & Use Toilet',
         item: 'Pay & Use Toilet',
         text: 'Pay & use toilet on Platform No. 1 is charging Rs. 5 for urinal use, which is free as per the agreement. Rate board not displayed.',
+        deficiency: 'Charges collected in excess of the approved rate',
         dept: 'COM',
         severity: 'Major',
         category: 'Contract',
@@ -865,6 +1007,7 @@ const demoInspections = [
         unit: 'Parcel Office',
         item: 'Storage',
         text: 'Parcels were stacked against the emergency exit of the parcel godown.',
+        deficiency: 'Parcel stacked so as to obstruct passenger movement',
         dept: 'COM',
         severity: 'Major',
         category: 'Parcel',
@@ -885,6 +1028,14 @@ async function createDemoObservation({ inspection, spec, ref, itemIds, ids, base
   const unitKey = inspection.train ? `train|${spec.unit}` : `station|${spec.unit}`;
   const unitId = ref.unitIds.get(unitKey) ?? null;
   const itemId = itemIds.get(`${inspection.module}|${spec.item}`) ?? null;
+  // An item named here but absent from the module's catalogue would silently
+  // produce an observation with no item link, which the repeat engine and the
+  // item analytics both depend on. Say so rather than seeding a half-linked row.
+  if (!itemId) {
+    throw new Error(
+      `Demo data: inspection item "${spec.item}" does not exist in module ${inspection.module}`
+    );
+  }
   const supervisorId = spec.supervisor
     ? ids.supervisorIds.get(spec.supervisor)
     : resolveSupervisor({ stationId, unitId, departmentId: ref.deptIds.get(spec.dept), itemId });
@@ -904,6 +1055,20 @@ async function createDemoObservation({ inspection, spec, ref, itemIds, ids, base
     value: true,
   }));
 
+  // The suggestion the inspector started from, then edited - which is what the
+  // New Inspection screen records, and what the deficiency analytics count.
+  const deficiencyId = spec.deficiency
+    ? get(
+        `SELECT id FROM item_deficiencies
+          WHERE text = ? AND active = 1
+            AND (item_id IS NULL OR item_id = ?)
+            AND (group_id IS NULL OR group_id = (SELECT group_id FROM inspection_items WHERE id = ?))
+          ORDER BY item_id IS NULL, group_id IS NULL LIMIT 1`,
+        [spec.deficiency, itemId, itemId]
+      )?.id ?? null
+    : null;
+  if (spec.deficiency && !deficiencyId) log(`  ! demo deficiency not matched: ${spec.deficiency}`);
+
   const observationId = insert('observations', {
     ref_no: nextRef('observations', 'OBS', new Date(observedAt).getFullYear()),
     inspection_id: inspection.id,
@@ -915,6 +1080,7 @@ async function createDemoObservation({ inspection, spec, ref, itemIds, ids, base
     unit_name: spec.unit,
     item_id: itemId,
     item_name: spec.item,
+    deficiency_id: deficiencyId,
     parameters: parameters.length ? JSON.stringify(parameters) : null,
     observation: spec.text,
     category_id: spec.category ? ref.categoryIds.get(spec.category) ?? null : null,
@@ -1359,6 +1525,30 @@ async function seedDemo(ref, itemIds, ids) {
   }
 
   log(`  demo: ${demoInspections.length} inspections, ${observationCount} observations, ${repeatFlagged} flagged as repeated`);
+  await seedNotes(ids);
+}
+
+/**
+ * One issued inspection note, so the letter format is visible without anyone
+ * having to compile one first. It is built through the same code the application
+ * uses, so it cannot drift from what the screen produces.
+ */
+async function seedNotes(ids) {
+  const { createNote } = await import('../lib/notes.js');
+  const completed = get(
+    `SELECT i.* FROM inspections i
+      WHERE i.status = 'completed'
+        AND (SELECT COUNT(*) FROM observations o WHERE o.inspection_id = i.id) > 1
+      ORDER BY i.completed_at DESC LIMIT 1`
+  );
+  if (!completed) return;
+  const inspector = get('SELECT * FROM users WHERE id = ?', [completed.inspector_id]);
+  const note = createNote({
+    payload: { inspection_id: completed.id, letter_date: String(completed.completed_at).slice(0, 10), status: 'issued' },
+    user: inspector,
+  });
+  update('inspection_notes', note.id, { created_at: completed.completed_at, issued_at: completed.completed_at });
+  log(`  inspection note: ${note.note_no} (${note.observations.length} items)`);
 }
 
 /** Runs the TDC sweep so reminders, overdue notices and escalations exist. */
@@ -1381,7 +1571,8 @@ async function main() {
   if (RESET) resetDatabase();
 
   const ref = seedMasters();
-  const itemIds = seedCatalogue(ref);
+  const { itemIds, groupIds } = seedCatalogue(ref);
+  seedDeficiencies(ref, itemIds, groupIds);
   const ids = seedPeople(ref);
 
   const existingObservations = get('SELECT COUNT(*) AS n FROM observations').n;

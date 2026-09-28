@@ -294,6 +294,45 @@ router.get(
   }
 );
 
+/* ------------------------ most reported deficiencies ---------------------- */
+
+/**
+ * Which deficiencies are actually reported most often. Because the New
+ * Inspection screen records which suggestion the inspector picked, this is a
+ * straight count rather than text matching - and it is the list that tells the
+ * division what to fix systemically rather than one observation at a time.
+ */
+router.get(
+  '/deficiencies',
+  query(filterSchema.extend({ limit: z.coerce.number().int().min(1).max(100).default(15) })),
+  (req, res) => {
+    const { limit, ...rest } = req.validQuery;
+    const { sql, params } = observationFilter(rest, req.user);
+    res.json({
+      data: all(
+        `SELECT d.id AS deficiency_id, d.text AS template, o.item_name, o.module_code,
+                COUNT(*) AS occurrences,
+                SUM(CASE WHEN o.status NOT IN ('closed','cancelled') THEN 1 ELSE 0 END) AS open,
+                SUM(CASE WHEN o.is_overdue = 1 THEN 1 ELSE 0 END) AS overdue,
+                COUNT(DISTINCT o.station_id) AS stations,
+                MAX(o.observed_at) AS last_seen
+           FROM v_observations o
+           JOIN item_deficiencies d ON d.id = o.deficiency_id
+          WHERE ${sql}
+          GROUP BY o.deficiency_id, o.item_name
+          ORDER BY occurrences DESC, overdue DESC
+          LIMIT ?`,
+        [...params, limit]
+      ).map((r) => ({
+        ...r,
+        // The stored template may carry {item}; show it against the item it was
+        // reported under.
+        text: String(r.template).replace(/\{item\}/gi, r.item_name ?? 'the item'),
+      })),
+    });
+  }
+);
+
 /* --------------------------- supervisor scoreboard ----------------------- */
 
 router.get('/supervisors', query(filterSchema), (req, res) => {

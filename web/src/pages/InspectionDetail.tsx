@@ -119,14 +119,21 @@ export default function InspectionDetail() {
           </dd>
         </dl>
 
-        {data.status !== 'completed' && (
-          <div className="row row--wrap" style={{ gap: 8, marginTop: 14 }}>
+        <div className="row row--wrap" style={{ gap: 8, marginTop: 14 }}>
+          {data.status !== 'completed' && (
             <Link to={`/inspections/new?module=${data.module_code}`} className="btn btn--quiet btn--sm">
               <Icon name="plus" size={14} /> Add observation
             </Link>
+          )}
+          {data.observation_count > 0 && (
+            <Link to={`/inspections/${data.id}/note`} className="btn btn--quiet btn--sm">
+              <Icon name="file" size={14} /> Inspection note
+            </Link>
+          )}
+          {data.status !== 'completed' && (
             <Button size="sm" icon="check" onClick={() => setCompleting(true)}>Complete inspection</Button>
-          </div>
-        )}
+          )}
+        </div>
       </Card>
 
       {(data.summary || summary?.text) && (

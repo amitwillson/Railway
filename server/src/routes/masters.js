@@ -1,6 +1,7 @@
 import express from 'express';
 import { all, get } from '../db/index.js';
-import { findSupervisors } from '../lib/assignment.js';
+import { findSupervisors, supervisorLinks } from '../lib/assignment.js';
+import { deficienciesForItem } from '../lib/deficiencies.js';
 import { notFound } from '../lib/errors.js';
 import { authenticate } from '../middleware/auth.js';
 import { query, z, optionalId, optionalText } from '../lib/validate.js';
@@ -166,7 +167,7 @@ function unitsFor({ stationId, appliesTo = 'station' }) {
     stationClause = '(u.station_id IS NULL OR u.station_id = ?)';
     params.push(stationId);
   }
-  return all(
+  const rows = all(
     `SELECT u.* FROM units u
       WHERE u.active = 1
         AND (u.applies_to = ? OR u.applies_to = 'both')
@@ -174,6 +175,19 @@ function unitsFor({ stationId, appliesTo = 'station' }) {
       ORDER BY u.sort_order, u.name`,
     params
   ).map((u) => ({ ...u, station_specific: u.station_id != null }));
+
+  // The platform areas are one set of master rows shared by every station, so a
+  // two-platform halt would otherwise offer Platform No. 6. Hide the platforms a
+  // station does not have; a platform mapped to the station explicitly is kept.
+  const platforms = stationId
+    ? get('SELECT platforms FROM stations WHERE id = ?', [stationId])?.platforms ?? 0
+    : 0;
+  if (!platforms) return rows;
+  return rows.filter((u) => {
+    if (u.station_specific || u.kind !== 'platform') return true;
+    const n = Number(/(\d+)\s*$/.exec(u.name)?.[1]);
+    return !Number.isFinite(n) || n <= platforms;
+  });
 }
 
 router.get(
@@ -312,13 +326,21 @@ router.get(
     const f = req.validQuery;
     const where = ['s.active = 1'];
     const params = [];
+    // A supervisor is linked to stations and departments, so both filters have to
+    // look through the link tables as well as the primary posting on the row.
     if (f.department_id) {
-      where.push('s.department_id = ?');
-      params.push(f.department_id);
+      where.push(`(s.department_id = ?
+                   OR EXISTS (SELECT 1 FROM supervisor_departments sd
+                               WHERE sd.supervisor_id = s.id AND sd.active = 1
+                                 AND sd.department_id = ?))`);
+      params.push(f.department_id, f.department_id);
     }
     if (f.station_id) {
-      where.push('(s.station_id = ? OR s.station_id IS NULL)');
-      params.push(f.station_id);
+      where.push(`(s.station_id = ? OR s.station_id IS NULL
+                   OR EXISTS (SELECT 1 FROM supervisor_stations ss
+                               WHERE ss.supervisor_id = s.id AND ss.active = 1
+                                 AND ss.station_id = ?))`);
+      params.push(f.station_id, f.station_id);
     }
     if (f.q) {
       where.push(
@@ -326,21 +348,24 @@ router.get(
       );
       params.push(`%${f.q.toLowerCase()}%`, `%${f.q.toLowerCase()}%`, `%${f.q.toLowerCase()}%`);
     }
-    res.json({
-      data: all(
-        `SELECT s.*, dep.name AS department_name, dep.code AS department_code,
-                st.name AS station_name, st.code AS station_code,
-                ro.name AS reporting_officer_name
-           FROM supervisors s
-           JOIN departments dep ON dep.id = s.department_id
-           LEFT JOIN stations st ON st.id = s.station_id
-           LEFT JOIN supervisors ro ON ro.id = s.reporting_officer_id
-          WHERE ${where.join(' AND ')}
-          ORDER BY dep.sort_order, s.name
-          LIMIT ?`,
-        [...params, f.limit]
-      ),
-    });
+    const rows = all(
+      `SELECT s.*, dep.name AS department_name, dep.code AS department_code,
+              st.name AS station_name, st.code AS station_code,
+              ro.name AS reporting_officer_name,
+              (SELECT COUNT(*) FROM supervisor_stations ss
+                WHERE ss.supervisor_id = s.id AND ss.active = 1) AS station_count,
+              (SELECT COUNT(*) FROM supervisor_departments sd
+                WHERE sd.supervisor_id = s.id AND sd.active = 1) AS department_count
+         FROM supervisors s
+         JOIN departments dep ON dep.id = s.department_id
+         LEFT JOIN stations st ON st.id = s.station_id
+         LEFT JOIN supervisors ro ON ro.id = s.reporting_officer_id
+        WHERE ${where.join(' AND ')}
+        ORDER BY dep.sort_order, s.name
+        LIMIT ?`,
+      [...params, f.limit]
+    );
+    res.json({ data: rows.map((r) => ({ ...r, ...supervisorLinks(r.id) })) });
   }
 );
 
@@ -371,6 +396,53 @@ router.get(
       auto_selected: candidates[0] ?? null,
       requires_choice: candidates.length > 1,
     });
+  }
+);
+
+/** One supervisor, with every station and department they are linked to. */
+router.get('/supervisors/:id', (req, res) => {
+  const row = get(
+    `SELECT s.*, dep.name AS department_name, dep.code AS department_code,
+            st.name AS station_name, st.code AS station_code,
+            ro.name AS reporting_officer_name, ro.designation AS reporting_officer_designation
+       FROM supervisors s
+       JOIN departments dep ON dep.id = s.department_id
+       LEFT JOIN stations st ON st.id = s.station_id
+       LEFT JOIN supervisors ro ON ro.id = s.reporting_officer_id
+      WHERE s.id = ?`,
+    [req.params.id]
+  );
+  if (!row) throw notFound('Supervisor');
+  res.json({
+    ...row,
+    ...supervisorLinks(row.id),
+    coverage: all(
+      `SELECT c.*, st.name AS station_name, u.name AS unit_name, g.name AS item_group_name
+         FROM supervisor_coverage c
+         LEFT JOIN stations st ON st.id = c.station_id
+         LEFT JOIN units u ON u.id = c.unit_id
+         LEFT JOIN item_groups g ON g.id = c.item_group_id
+        WHERE c.supervisor_id = ? AND c.active = 1
+        ORDER BY c.priority`,
+      [row.id]
+    ),
+  });
+});
+
+/* ------------------------ suggested deficiencies --------------------------- */
+
+/**
+ * The "what usually fails" dropdown for one inspection item: the suggestions
+ * mapped to the item, then to its group, then to its module, then the generic
+ * ones, followed by the wordings actually used for this item before now.
+ */
+router.get(
+  '/items/:id/deficiencies',
+  query(z.object({ station_id: optionalId, limit: z.coerce.number().int().min(1).max(100).default(40) })),
+  (req, res) => {
+    const item = get('SELECT * FROM inspection_items WHERE id = ?', [req.params.id]);
+    if (!item) throw notFound('Inspection item');
+    res.json(deficienciesForItem(item, req.validQuery));
   }
 );
 

@@ -31,7 +31,9 @@ const TABLES = [
   'item_parameters', 'item_parameter_map', 'observation_categories', 'severities',
   'rule_references', 'contractors', 'tdc_rules', 'notification_rules',
   'escalation_levels', 'settings', 'supervisors', 'supervisor_coverage',
+  'supervisor_stations', 'supervisor_departments', 'item_deficiencies',
   'inspections', 'observations', 'attachments', 'compliances',
+  'inspection_notes', 'inspection_note_observations',
   'observation_events', 'approvals', 'notifications', 'notification_deliveries',
   'audit_log',
 ];

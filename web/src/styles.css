@@ -592,6 +592,13 @@ img { max-width: 100%; display: block; }
 .obs:hover { border-color: var(--line-strong); text-decoration: none; }
 .obs__top { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; margin-bottom: 5px; }
 .obs__ref { font-size: 0.74rem; font-weight: 700; color: var(--muted); font-variant-numeric: tabular-nums; }
+/* Serial number of an observation within an inspection or an inspection note. */
+.obs__num {
+  display: inline-grid; place-items: center;
+  min-width: 18px; height: 18px; padding: 0 4px;
+  border-radius: 5px; background: var(--surface-3); color: var(--ink-2);
+  font-size: 0.68rem; font-weight: 700; font-variant-numeric: tabular-nums;
+}
 .obs__text { font-size: 0.92rem; line-height: 1.45; margin-bottom: 7px; }
 .obs__meta { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 0.75rem; color: var(--muted); }
 .obs__meta b { font-weight: 600; color: var(--ink-2); }
@@ -809,11 +816,99 @@ table.data a { font-weight: 600; }
 }
 .login__demo-row:hover { border-color: var(--accent); }
 
+/* -------------------------------------------------------------------------- */
+/* Inspection note - the letter format                                        */
+/*                                                                            */
+/* The same markup is shown on screen and sent to the printer, so what the     */
+/* officer signs off on screen is what comes out on paper. Widths are in       */
+/* millimetres against an A4 page rather than in pixels.                      */
+/* -------------------------------------------------------------------------- */
+
+.letter-wrap { overflow-x: auto; }
+
+.letter {
+  width: 210mm; max-width: 100%; min-height: 0;
+  margin: 0 auto; padding: 16mm 15mm;
+  background: #fff; color: #16283a;
+  border: 1px solid var(--line); border-radius: var(--r);
+  box-shadow: var(--shadow-1);
+  font-size: 10.5pt; line-height: 1.5;
+}
+.letter__head { text-align: center; border-bottom: 1px solid #16283a; padding-bottom: 6px; margin-bottom: 10px; }
+.letter__org { font-size: 14pt; font-weight: 700; letter-spacing: 0.04em; }
+.letter__office { font-size: 10pt; }
+.letter__meta {
+  display: flex; justify-content: space-between; gap: 12px;
+  font-weight: 700; font-size: 9.5pt; margin-bottom: 12px;
+}
+.letter__to { margin-bottom: 12px; }
+.letter__to-name { padding-left: 14px; }
+.letter__subject { margin: 0 0 4px; }
+.letter__ref { margin: 0 0 12px; font-size: 9pt; color: #5a6b7b; }
+.letter__salutation { margin: 0 0 8px; }
+.letter__body { margin: 0 0 12px; text-align: justify; }
+.letter__group { margin-bottom: 12px; break-inside: avoid; }
+.letter__group-head { font-weight: 700; font-size: 10pt; color: #0b6b6b; margin-bottom: 4px; }
+.letter__table { width: 100%; border-collapse: collapse; font-size: 8.5pt; }
+.letter__table th,
+.letter__table td { border: 1px solid #b9c7d3; padding: 4px 5px; vertical-align: top; text-align: left; }
+.letter__table th { background: #eef4f9; font-weight: 700; }
+.letter__table td.center, .letter__table th.center { text-align: center; }
+.letter__overdue { color: #b3261e; font-size: 7.5pt; font-weight: 700; }
+.letter__signature { margin: 22px 0 0; text-align: right; }
+.letter__sign-name { font-weight: 700; }
+.letter__copy { margin-top: 18px; padding-top: 6px; border-top: 1px solid #b9c7d3; font-size: 9pt; }
+
+/* The letter is a document, so it keeps paper colours in dark mode. */
+:root[data-theme='dark'] .letter,
+:root[data-theme='dark'] .letter__table th { color-scheme: light; }
+
+/* A row of checkboxes: pick which observations go into the note. */
+.pick {
+  display: flex; align-items: flex-start; gap: 9px;
+  padding: 8px 9px; border: 1px solid var(--line); border-radius: var(--r-sm);
+  background: var(--surface-2); cursor: pointer;
+}
+.pick:hover { border-color: var(--line-strong); }
+.pick input { margin-top: 2px; flex: none; width: 16px; height: 16px; accent-color: var(--accent); }
+.pick > span { min-width: 0; }
+
+.grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0 12px; }
+.mt-12 { margin-top: 12px; }
+
+/* A removable link: which stations and departments a supervisor answers for. */
+.tag {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 4px 6px 4px 9px; border-radius: 999px;
+  border: 1px solid var(--line-strong); background: var(--surface-2);
+  font-size: 0.78rem; line-height: 1.2;
+}
+.tag__x {
+  display: grid; place-items: center; width: 17px; height: 17px;
+  border: 0; border-radius: 50%; background: var(--surface-3); color: var(--muted); cursor: pointer;
+}
+.tag__x:hover { background: var(--critical); color: #fff; }
+.tag__x:disabled { opacity: 0.5; cursor: default; }
+
+/* A selectable row in a two-pane admin list. */
+.pick-row {
+  display: flex; align-items: center; gap: 8px; width: 100%;
+  padding: 9px 12px; border: 0; border-bottom: 1px solid var(--line);
+  background: none; color: inherit; text-align: left; cursor: pointer;
+}
+.pick-row:hover { background: var(--surface-2); }
+.pick-row--on { background: var(--accent-soft); box-shadow: inset 3px 0 0 var(--accent); }
+@media (max-width: 520px) { .grid-2 { grid-template-columns: 1fr; } }
+
 @media print {
-  .topbar, .bottomnav, .sidenav, .toasts, .btn, .chart__toggle { display: none !important; }
+  .topbar, .bottomnav, .sidenav, .toasts, .btn, .chart__toggle, .no-print,
+  .page-head, .section-label { display: none !important; }
   .content { padding: 0; max-width: none; }
   .card { box-shadow: none; border-color: #ccc; break-inside: avoid; }
   body { background: #fff; }
+  .letter-wrap { overflow: visible; }
+  .letter { width: auto; margin: 0; padding: 0; border: 0; border-radius: 0; box-shadow: none; }
+  @page { size: A4; margin: 16mm 15mm; }
 }
 
 @media (prefers-reduced-motion: reduce) {

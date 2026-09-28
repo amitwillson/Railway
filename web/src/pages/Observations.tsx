@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { api, reportUrl } from '../api/client';
 import { exportReport } from '../api/transport';
 import { useAuth } from '../state/AuthContext';
 import ObservationCard from '../components/ObservationCard';
 import Icon from '../components/Icon';
-import { Button, Card, EmptyState, Field, Pager, SearchSelect, Skeletons } from '../components/ui';
+import { Badge, Button, Card, EmptyState, Field, Pager, SearchSelect, Skeletons } from '../components/ui';
 import { STATUS_LABEL } from '../lib/format';
 import type { Observation, Paged } from '../api/types';
 
@@ -36,6 +36,9 @@ export default function Observations() {
   const [loading, setLoading] = useState(true);
   const [showFilters, setShowFilters] = useState(false);
   const [term, setTerm] = useState(params.get('q') ?? '');
+  /** Selection mode: pick observations across this view and compile them into one note. */
+  const [picking, setPicking] = useState(false);
+  const [picked, setPicked] = useState<number[]>([]);
 
   const query = useMemo(() => Object.fromEntries(params.entries()), [params]);
 
@@ -109,7 +112,40 @@ export default function Observations() {
         >
           {activeFilterCount ? String(activeFilterCount) : ''}
         </Button>
+        <Button
+          variant={picking ? undefined : 'ghost'}
+          icon="file"
+          onClick={() => {
+            setPicking((v) => !v);
+            setPicked([]);
+          }}
+          aria-label="Compile an inspection note"
+          title="Pick observations and compile them into one inspection note"
+        />
       </form>
+
+      {picking && (
+        <Card pad>
+          <div className="row row--wrap" style={{ gap: 8 }}>
+            <span className="small">
+              {picked.length === 0
+                ? 'Tick the observations that should go into one letter.'
+                : `${picked.length} observation${picked.length === 1 ? '' : 's'} selected.`}
+            </span>
+            <span className="spacer" />
+            <Button size="sm" variant="ghost" onClick={() => setPicked([])} disabled={picked.length === 0}>
+              Clear
+            </Button>
+            {picked.length > 0 ? (
+              <Link className="btn btn--sm" to={`/notes/new?observations=${picked.join(',')}`}>
+                <Icon name="file" size={13} /> Compile inspection note
+              </Link>
+            ) : (
+              <Button size="sm" disabled icon="file">Compile inspection note</Button>
+            )}
+          </div>
+        </Card>
+      )}
 
       <div className="chips">
         {PRESETS.map((preset) => {
@@ -200,7 +236,32 @@ export default function Observations() {
       ) : (
         <>
           <div className="stack" style={{ '--gap': '10px' } as React.CSSProperties}>
-            {page.data.map((o) => <ObservationCard key={o.id} observation={o} />)}
+            {page.data.map((o) =>
+              picking ? (
+                <label key={o.id} className="pick">
+                  <input
+                    type="checkbox"
+                    checked={picked.includes(o.id)}
+                    onChange={(e) =>
+                      setPicked((list) => (e.target.checked ? [...list, o.id] : list.filter((id) => id !== o.id)))
+                    }
+                  />
+                  <span style={{ flex: 1 }}>
+                    <span className="row row--wrap" style={{ gap: 6 }}>
+                      <span className="obs__ref">{o.ref_no}</span>
+                      <Badge tone="outline">{o.department_name}</Badge>
+                      {o.station_name && <span className="xsmall muted">{o.station_name}</span>}
+                      {o.tdc && <span className="xsmall muted">TDC {o.tdc}</span>}
+                    </span>
+                    <span className="small clamp-2" style={{ display: 'block', marginTop: 3 }}>
+                      {[o.unit_name, o.item_name].filter(Boolean).join(' · ')} — {o.observation}
+                    </span>
+                  </span>
+                </label>
+              ) : (
+                <ObservationCard key={o.id} observation={o} />
+              )
+            )}
           </div>
           <Pager
             page={page.page}

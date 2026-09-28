@@ -11,7 +11,8 @@ import {
 import { dictate, speechSupported, type Dictation } from '../lib/speech';
 import { addDays, formatDate, todayIso } from '../lib/format';
 import type {
-  Department, Inspection, InspectionItem, Observation, RepeatResult, Station, Supervisor, Train, Unit,
+  Deficiency, DeficiencyList, Department, Inspection, InspectionItem, Observation,
+  RepeatResult, Station, Supervisor, Train, Unit,
 } from '../api/types';
 
 const DRAFT_KEY = 'ri.activeInspection';
@@ -44,7 +45,9 @@ export default function NewInspection() {
   const [stationOptions, setStationOptions] = useState<Station[]>([]);
   const [trainOptions, setTrainOptions] = useState<Train[]>([]);
   const [inspection, setInspection] = useState<ActiveInspection | null>(null);
-  const [recorded, setRecorded] = useState<{ ref_no: string; text: string; supervisor?: string | null; offline?: boolean }[]>([]);
+  const [recorded, setRecorded] = useState<
+    { id?: number; ref_no: string; text: string; unit?: string | null; item?: string | null; supervisor?: string | null; offline?: boolean }[]
+  >([]);
 
   /* ----------------------------- observation fields ---------------------- */
   const [units, setUnits] = useState<Unit[]>([]);
@@ -55,6 +58,10 @@ export default function NewInspection() {
   const [itemDetail, setItemDetail] = useState<InspectionItem | null>(null);
   const [checked, setChecked] = useState<string[]>([]);
   const [text, setText] = useState('');
+  const [deficiencies, setDeficiencies] = useState<DeficiencyList | null>(null);
+  const [deficiencyId, setDeficiencyId] = useState<number | null>(null);
+  /** The wording the last picked suggestion put in the box, so an edit is never lost. */
+  const suggested = useRef('');
   const [departmentId, setDepartmentId] = useState<number | null>(null);
   const [supervisors, setSupervisors] = useState<Supervisor[]>([]);
   const [supervisorId, setSupervisorId] = useState<number | null>(null);
@@ -157,6 +164,19 @@ export default function NewInspection() {
       .then(setItems)
       .catch(() => setItems(null));
   }, [moduleCode, isTrain]);
+
+  // The suggested-deficiency list follows the item: what usually fails here, and
+  // the wordings already used for it at this station.
+  useEffect(() => {
+    if (!itemId) {
+      setDeficiencies(null);
+      setDeficiencyId(null);
+      return;
+    }
+    api.get<DeficiencyList>(`/masters/items/${itemId}/deficiencies`, { station_id: station?.id })
+      .then(setDeficiencies)
+      .catch(() => setDeficiencies(null));
+  }, [itemId, station?.id]);
 
   // Selecting an item pre-fills department, severity, category and rule link.
   useEffect(() => {
@@ -270,6 +290,39 @@ export default function NewInspection() {
     [items]
   );
 
+  /**
+   * "What usually fails here", narrowest scope first, with the wordings already
+   * used for this item at this station offered under their own heading.
+   */
+  const deficiencyOpts: Option[] = useMemo(() => {
+    if (!deficiencies) return [];
+    const heading: Record<Deficiency['scope'], string> = {
+      item: `Common for ${deficiencies.item.name}`,
+      group: 'Common for this category',
+      module: 'Common for this module',
+      generic: 'General',
+    };
+    const suggestions = deficiencies.data.map((d) => ({
+      value: d.id,
+      label: d.text,
+      group: heading[d.scope],
+      sub: [
+        d.department_name && `Action by ${d.department_name}`,
+        d.suggested_tdc_days && `TDC ${d.suggested_tdc_days} day${d.suggested_tdc_days === 1 ? '' : 's'}`,
+        d.times_used > 0 && `reported ${d.times_used}x`,
+      ]
+        .filter(Boolean)
+        .join(' · ') || undefined,
+    }));
+    const used = deficiencies.previously_used.map((p, index) => ({
+      value: `used-${index}`,
+      label: p.text,
+      group: 'Recorded here before',
+      sub: `${p.times_used} times · last ${formatDate(p.last_used)}`,
+    }));
+    return [...suggestions, ...used];
+  }, [deficiencies]);
+
   const departmentOpts: Option[] = useMemo(
     () => (masters?.departments ?? []).map((d: Department) => ({ value: d.id, label: d.name, sub: d.code })),
     [masters]
@@ -310,6 +363,40 @@ export default function NewInspection() {
     setListening(true);
   };
 
+  /**
+   * Picking a suggestion fills the observation box and, when the suggestion says
+   * so, the department, the severity and the TDC. The wording stays editable: if
+   * the inspector has already typed something of their own it is kept and the
+   * suggestion is added to it rather than overwriting the work.
+   */
+  const pickDeficiency = (value: number | string | null) => {
+    if (value == null) {
+      setDeficiencyId(null);
+      return;
+    }
+    const used = typeof value === 'string' && value.startsWith('used-')
+      ? deficiencies?.previously_used[Number(value.slice(5))]
+      : null;
+    const suggestion = used ? null : deficiencies?.data.find((d) => d.id === value) ?? null;
+    const wording = used?.text ?? suggestion?.text;
+    if (!wording) return;
+
+    const own = text.trim() && text.trim() !== suggested.current.trim();
+    const next = own ? `${text.trim().replace(/[.\s]*$/, '')}. ${wording}` : wording;
+    suggested.current = next;
+    setText(next);
+    setDeficiencyId(suggestion?.id ?? null);
+
+    if (suggestion?.department_id) setDepartmentId(suggestion.department_id);
+    if (suggestion?.severity_id) setSeverityId(suggestion.severity_id);
+    if (suggestion?.category_id) setCategoryId(suggestion.category_id);
+    if (suggestion?.suggested_tdc_days) {
+      setHasTdc(true);
+      setTdc(addDays(todayIso(), suggestion.suggested_tdc_days));
+    }
+  };
+
+  /** Clears the observation, keeping the location so the next one is quick. */
   const resetObservationFields = () => {
     setText('');
     setPhotos([]);
@@ -318,6 +405,18 @@ export default function NewInspection() {
     setError(null);
     setHasTdc(false);
     setTdc('');
+    setDeficiencyId(null);
+    suggested.current = '';
+  };
+
+  /** Clears the unit and the item as well, for a move to another area. */
+  const nextArea = () => {
+    resetObservationFields();
+    setUnitId(null);
+    setItemId(null);
+    setItemDetail(null);
+    setCoach('');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
   const validate = (): string | null => {
@@ -383,6 +482,7 @@ export default function NewInspection() {
         unit_id: unitId ?? undefined,
         coach: coach || undefined,
         item_id: itemId ?? undefined,
+        deficiency_id: deficiencyId ?? undefined,
         observation: text.trim(),
         category_id: categoryId ?? undefined,
         severity_id: severityId ?? undefined,
@@ -404,7 +504,14 @@ export default function NewInspection() {
           await api.postForm(`/observations/${created.id}/attachments`, form);
         }
         setRecorded((list) => [
-          { ref_no: created.ref_no, text: created.observation, supervisor: created.supervisor_name },
+          {
+            id: created.id,
+            ref_no: created.ref_no,
+            text: created.observation,
+            unit: created.unit_name,
+            item: created.item_name,
+            supervisor: created.supervisor_name,
+          },
           ...list,
         ]);
         toast.success(
@@ -425,7 +532,14 @@ export default function NewInspection() {
           photos
         );
         setRecorded((list) => [
-          { ref_no: 'Saved locally', text: text.trim(), supervisor: autoSupervisor?.name, offline: true },
+          {
+            ref_no: 'Saved locally',
+            text: text.trim(),
+            unit: units.find((u) => u.id === unitId)?.name ?? null,
+            item: itemDetail?.name ?? null,
+            supervisor: autoSupervisor?.name,
+            offline: true,
+          },
           ...list,
         ]);
         toast.push('Offline - saved locally. It will sync automatically.', 'warn');
@@ -487,7 +601,9 @@ export default function NewInspection() {
           <div className="row row--wrap" style={{ gap: 8 }}>
             <span>
               Recording into <strong>{inspection.ref_no ?? 'a locally saved inspection'}</strong>
-              {recorded.length > 0 && ` · ${recorded.length} observation${recorded.length === 1 ? '' : 's'} so far`}
+              {recorded.length > 0
+                ? ` · ${recorded.length} observation${recorded.length === 1 ? '' : 's'} recorded. Add the next one below.`
+                : ' · add as many observations as you need, then finish'}
             </span>
             <span className="spacer" />
             <Button size="sm" variant="ghost" onClick={completeInspection}>Complete inspection</Button>
@@ -633,6 +749,20 @@ export default function NewInspection() {
 
       {/* Observation - the most prominent input */}
       <Card title="Observation" icon="edit">
+        {itemId && deficiencyOpts.length > 0 && (
+          <Field
+            label="Suggested deficiency"
+            hint="Pick what was found and the wording, department and TDC are filled in - all of it stays editable"
+          >
+            <SearchSelect
+              options={deficiencyOpts}
+              value={deficiencyId}
+              onChange={pickDeficiency}
+              placeholder="Choose a common deficiency, or type your own below"
+              searchPlaceholder="Search deficiencies"
+            />
+          </Field>
+        )}
         <textarea
           className="textarea"
           value={text}
@@ -794,8 +924,19 @@ export default function NewInspection() {
         }}
       >
         <Button type="submit" size="lg" block loading={submitting} icon="send">
-          SUBMIT OBSERVATION
+          {recorded.length > 0 ? `SUBMIT OBSERVATION ${recorded.length + 1}` : 'SUBMIT OBSERVATION'}
         </Button>
+        {recorded.length > 0 && (
+          <div className="row row--wrap" style={{ gap: 8, marginTop: 8 }}>
+            <Button size="sm" variant="quiet" icon="plus" onClick={nextArea}>
+              Next area / item
+            </Button>
+            <span className="spacer" />
+            <Button size="sm" variant="ghost" icon="check" onClick={completeInspection}>
+              Finish inspection
+            </Button>
+          </div>
+        )}
         {!online && (
           <div className="xsmall center muted" style={{ marginTop: 6 }}>
             <Icon name="offline" size={12} /> Offline - the observation will be saved on this device and synced later
@@ -806,17 +947,34 @@ export default function NewInspection() {
       {recorded.length > 0 && (
         <Card
           title={`Recorded in this inspection (${recorded.length})`}
-          subtitle="One inspection can carry any number of observations"
+          subtitle="One inspection carries as many observations as the inspection found"
           pad={false}
+          action={
+            inspection?.id ? (
+              <Link className="btn btn--sm btn--quiet" to={`/inspections/${inspection.id}/note`}>
+                <Icon name="file" size={13} /> Inspection note
+              </Link>
+            ) : undefined
+          }
         >
           <div style={{ padding: '4px 0' }}>
             {recorded.map((r, index) => (
               <div key={`${r.ref_no}-${index}`} style={{ padding: '9px 14px', borderBottom: '1px solid var(--line)' }}>
                 <div className="row" style={{ gap: 6 }}>
-                  <span className="obs__ref">{r.ref_no}</span>
+                  <span className="obs__num">{recorded.length - index}</span>
+                  {r.id ? (
+                    <Link to={`/observations/${r.id}`} className="obs__ref">{r.ref_no}</Link>
+                  ) : (
+                    <span className="obs__ref">{r.ref_no}</span>
+                  )}
                   {r.offline && <Badge tone="warning">Saved locally</Badge>}
                   {r.supervisor && <span className="xsmall muted truncate">→ {r.supervisor}</span>}
                 </div>
+                {(r.unit || r.item) && (
+                  <div className="xsmall muted" style={{ marginTop: 2 }}>
+                    {[r.unit, r.item].filter(Boolean).join(' · ')}
+                  </div>
+                )}
                 <div className="small clamp-2" style={{ marginTop: 2 }}>{r.text}</div>
               </div>
             ))}

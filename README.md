@@ -15,6 +15,7 @@ after that is automatic:
 ```
 One inspection -> many observations -> automatic responsibility -> automatic notification
    -> time-bound compliance -> verification -> closure -> analytics
+                            \-> compiled into one numbered Inspection Note
 ```
 
 <p align="center">
@@ -66,7 +67,8 @@ npm run build:demo        # rebuild it from the current seed
 ### Tests
 
 ```bash
-npm test                    # 41 unit and API tests: engines, workflow, RBAC, sync, reports, TDC
+npm test                    # 79 unit and API tests: engines, workflow, RBAC, sync, reports, TDC,
+                            # supervisor links, suggested deficiencies, notes, station import
 npm run smoke               # end-to-end walkthrough against a running server
 ```
 
@@ -94,10 +96,15 @@ Inspection Type -> Station / Train -> Unit / Area -> Amenity, Service or Inspect
   capture** and multiple photographs or a short video.
 * **Checklist parameters** per item (Available, Functional, Clean, Adequate, Accessible, &hellip;),
   configurable per item by the administrator.
+* **A dropdown of what usually fails.** Picking the item offers the common deficiencies for it, and
+  choosing one fills the wording, the department and the TDC in a single tap. See below.
 * **The inspector never types a mobile number.** Station + Unit + Action By resolves the concerned
   supervisor automatically.
 * **TDC stays optional** &mdash; "No TDC" is a first-class choice.
-* One inspection carries any number of observations; the context stays put between submissions.
+* **One inspection, many observations.** After each submission the location stays put and only the
+  observation clears, so the next one is a few taps; "Next area / item" clears the unit and the item
+  for a move down the platform, and a running list shows everything recorded so far. The inspection
+  is finished when the officer says so, not when the first observation is submitted.
 
 ### 2. Smart assignment
 
@@ -110,10 +117,20 @@ Supervisor Master, best match first, and says *why* it matched:
 | 20 | Explicit coverage for this station and unit kind (all platforms, all toilets &hellip;) |
 | 25 | Coverage for this inspection category |
 | 30 | Coverage for this station |
-| 40 | Posted at this station, area of responsibility matches the unit |
+| 40 | Linked to this station, area of responsibility matches the unit |
 | 50 | Posted at this station in this department |
+| 55 | Covers this station in this department (a section link, not the posting) |
 | 60 | Nominated departmental supervisor |
 | 70 | Any active supervisor in the department |
+
+**A supervisor is linked to stations and to departments, not just to one of each.** The posting on
+the supervisor's own record is one station link and one department link; further links cover the
+rest of the section, or a second department. So a section SSE posted at Gadarwara is found at
+Pipariya, Bankhedi and every other station on the link, and a Station Manager can answer for both
+Commercial and Operating. Someone who only *covers* a department ranks two points below the people
+whose department it actually is, so the right person still wins a tie. Admin &rarr; Supervisors
+edits both sets of links; nothing is deleted, only deactivated, so observations already assigned
+keep pointing at a valid record.
 
 If several supervisors qualify, the best is pre-selected and the rest stay in a searchable
 dropdown. If none exists, the observation is still recorded and the divisional office is told that
@@ -131,7 +148,70 @@ stemmer, so "not functioning" matches "not functional") within the same category
 its reason, similarity and status, and a **photo comparison** view puts the current photographs
 next to the earlier ones.
 
-### 4. Time-bound compliance
+### 4. Suggested deficiencies
+
+Picking the inspection item offers a dropdown of what usually fails, narrowest scope first:
+
+| Scope | Example under *Water Cooler* |
+| --- | --- |
+| The item | *Water cooler is not functioning.* &middot; *Water cooler functioning but water is not cool* |
+| Its group | *Water supply not available at the time of inspection* &middot; *Tap leaking, water being wasted* |
+| Its module | *Amenity provided but unusable by passengers in its present condition* |
+| Everywhere | *Water Cooler not available* &mdash; one stored row, worded for whichever item is selected |
+
+<p align="center">
+  <img src="docs/screenshots/suggested-deficiency.png" alt="The suggested-deficiency dropdown under the observation box" width="330">
+</p>
+
+Choosing a suggestion fills the observation text and, where the suggestion says so, the department
+in *Action By*, the severity and a suggested TDC. **The wording stays editable**: a suggestion is a
+starting point, and text the inspector has already typed is kept and added to rather than
+overwritten. Wordings already recorded for that item at that station are offered under their own
+heading, so the list gets more useful the longer the system is in service.
+
+Because the screen records *which* suggestion an observation came from, the dashboard can answer
+"which deficiencies are reported most often" as a straight count rather than by matching text
+&mdash; which is the list that tells the division what to fix systemically rather than one
+observation at a time. All of it is master data: Admin &rarr; Suggested deficiency adds, rewords or
+retires a suggestion without a code change.
+
+### 5. The Inspection Note
+
+An inspection produces a list of observations, each already assigned with its own target date. What
+goes out of the office, though, is a letter. **Inspection Note** compiles them into one:
+
+```
+WEST CENTRAL RAILWAY
+Office of the Divisional Railway Manager (Commercial), Jabalpur Division
+-----------------------------------------------------------------------
+No. JBP/COM/INSP/2026-27/014                        Date: 30 September 2026
+
+To,   The Concerned Supervisors / Departmental Officers
+Sub:  Deficiencies noticed during passenger amenities inspection at Jabalpur
+
+Sl.  Location / Unit   Item            Deficiency noticed     Action by   TDC
+ 1   Platform No. 2    Water Cooler    Water cooler is not    Electrical  02.10.2026
+                                       functioning.
+```
+
+<p align="center">
+  <img src="docs/screenshots/inspection-note.png" alt="An issued inspection note in the office letter format" width="620">
+</p>
+
+* Compiled **from one inspection**, or from **observations picked across several** &mdash; tick them
+  in the observation list and choose *Compile inspection note*.
+* The subject, the addressee, the opening and closing paragraphs, the signatory and the copy-to list
+  are all editable before it goes out, and the standing wording comes from settings so the office
+  format is set once.
+* Optionally **grouped by the department that has to act**, which is how each department reads it.
+* Prints as a **PDF letter** from the server, or straight from the browser; also exports as CSV.
+* Every note carries a **running number in the office series** (restarting each financial year) and a
+  QR code that verifies it without a login.
+* A note is a **record**: once issued its wording is fixed &mdash; it can be cancelled and replaced,
+  not quietly rewritten. Reopening it shows where each item now stands against the letter as it went
+  out.
+
+### 6. Time-bound compliance
 
 ```
 Submitted -> Assigned -> Acknowledged -> Action in progress
@@ -153,19 +233,20 @@ digital signature), **reject** (reopened, reason mandatory) or **physical verifi
 (stays open until seen on the ground). Every round of compliance is kept &mdash; nothing is
 overwritten.
 
-### 5. Dashboards and reports
+### 7. Dashboards and reports
 
 <p align="center">
   <img src="docs/screenshots/dashboard.png" alt="Divisional dashboard" width="760">
 </p>
 
 Overview, module-wise, department-wise, station-wise, severity, 90-day trend, repeated
-deficiencies and a supervisor scoreboard, all honouring the same filters. Eight report types
+deficiencies, **most reported deficiencies** and a supervisor scoreboard, all honouring the same
+filters. Eight report types
 (inspection, compliance, pending, overdue, department-wise, station-wise, repeated deficiency,
 module-wise) export as **PDF, Excel or CSV**. Inspection PDFs carry the observations, photographs,
 signatures and a **QR code** that verifies the report against the live record without a login.
 
-### 6. Works offline
+### 8. Works offline
 
 The web client is an installable PWA. With no connectivity it keeps the master data it last saw,
 records inspections, observations and photographs in IndexedDB, shows **"Offline &ndash; saved
@@ -173,17 +254,35 @@ locally"**, and uploads everything automatically when the signal returns
 (**"Successfully synced"**). Every queued item carries a client UUID, so a retry can never create a
 duplicate. The pending queue is visible and under the inspector's control.
 
-### 7. Administration and audit
+### 9. Administration and audit
 
 <p align="center">
   <img src="docs/screenshots/admin-masters.png" alt="Admin panel" width="760">
 </p>
 
-Twenty-one master tables are editable from the Admin Panel &mdash; stations, units, amenities,
-inspection items, checklist parameters, departments, supervisors and their coverage, trains,
-contractors and licensees, severities, categories, TDC rules, notification rules and the escalation
-hierarchy. **Routine master-data changes never need a code change.** Masters are deactivated rather
-than deleted, so historical observations keep pointing at a valid record.
+Twenty-four master tables are editable from the Admin Panel &mdash; stations, units, amenities,
+inspection items, suggested deficiencies, checklist parameters, departments, supervisors with their
+station and department links and their coverage, trains, contractors and licensees, severities,
+categories, TDC rules, notification rules and the escalation hierarchy. **Routine master-data
+changes never need a code change.** Masters are deactivated rather than deleted, so historical
+observations keep pointing at a valid record.
+
+Two screens are purpose-built because the generic table editor is the wrong tool for them:
+
+* **Supervisors** &mdash; pick a supervisor and tick off the stations and the departments they answer
+  for. This is what the assignment engine reads.
+
+  <p align="center">
+    <img src="docs/screenshots/supervisor-links.png" alt="Editing the stations and departments a supervisor answers for" width="760">
+  </p>
+
+* **Stations &rarr; Import** &mdash; the station list is the one master every division has to replace
+  with its own, and editing forty stations one at a time is not a reasonable way to do it. Export
+  gives the current list in exactly the shape the importer accepts; import identifies a station by
+  its code, so a known code is updated and a new one added. **Check** shows what the file would do
+  before anything is written, and names the line and the reason for every row it would skip. Nothing
+  is ever deleted: a station left out of the file can be deactivated, and stays in the database so
+  that past observations still resolve.
 
 Every state-changing action writes an audit row with the user, role, timestamp, action, entity and
 the **previous and new value**. Submitted observations are never silently modified: the text can be
@@ -287,10 +386,15 @@ acceptance &mdash; updating every dashboard and report on the way.
   <img src="docs/screenshots/observation-detail.png" alt="Observation detail" width="760">
 </p>
 
+The observation text is the first entry in the suggested-deficiency dropdown for Water Cooler, so in
+practice the inspector taps it rather than typing it &mdash; and the department and the TDC come with
+it.
+
 The same dataset also carries earlier occurrences of that deficiency, so the repeated-deficiency
 banner appears before the inspector even submits, and observations in every other state: acknowledged,
 action in progress, compliance submitted, rejected and reopened, closed, overdue and escalated,
-cancelled, with and without a TDC, at stations and on trains, across all three modules.
+cancelled, with and without a TDC, at stations and on trains, across all three modules. One issued
+Inspection Note is seeded too, so the letter format is visible without having to compile one first.
 
 ## Further documentation
 

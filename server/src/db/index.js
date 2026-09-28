@@ -23,10 +23,32 @@ export function getDb() {
   return db;
 }
 
+/**
+ * Columns added to tables that already existed in an earlier version. CREATE
+ * TABLE IF NOT EXISTS leaves an existing table alone, so a new column has to be
+ * added explicitly for a database that is being upgraded in place.
+ */
+const ADDED_COLUMNS = [
+  { table: 'observations', column: 'deficiency_id', definition: 'INTEGER REFERENCES item_deficiencies(id)' },
+  { table: 'stations', column: 'section', definition: 'TEXT' },
+];
+
 /** Applies schema.sql. It is written to be idempotent (CREATE ... IF NOT EXISTS). */
 export function migrate(database = getDb()) {
   const sql = fs.readFileSync(SCHEMA_FILE, 'utf8');
   database.exec(sql);
+  let added = 0;
+  for (const { table, column, definition } of ADDED_COLUMNS) {
+    const existing = database.prepare(`PRAGMA table_info(${table})`).all();
+    if (existing.length && !existing.some((c) => c.name === column)) {
+      database.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+      added += 1;
+    }
+  }
+  // v_observations selects o.*, so it has to be rebuilt after a column is added.
+  // schema.sql already recreates the views, but it ran before the ALTER.
+  const views = sql.indexOf('DROP VIEW IF EXISTS v_observations');
+  if (added > 0 && views >= 0) database.exec(sql.slice(views));
   return database;
 }
 

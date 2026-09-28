@@ -92,6 +92,7 @@ const operationSchema = z.discriminatedUnion('type', [
       unit_id: z.coerce.number().int().positive().optional(),
       unit_name: optionalText,
       item_id: z.coerce.number().int().positive().optional(),
+      deficiency_id: z.coerce.number().int().positive().optional(),
       coach: optionalText,
       parameters: z.array(z.object({ parameter_id: z.coerce.number().optional(), name: z.string(), value: z.any() })).optional(),
       observation: z.string().trim().min(5),

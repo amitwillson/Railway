@@ -62,7 +62,9 @@ see everything.
 | GET | `/masters/units` | `station_id`, `location_type`, `applies_to` |
 | GET | `/masters/items` | `module_code`, `applies_to`, `group_id`, `q`; returns flat and grouped |
 | GET | `/masters/items/:id` | With the checklist parameters configured for it |
-| GET | `/masters/supervisors` | `department_id`, `station_id`, `q` |
+| GET | `/masters/items/:id/deficiencies` | **What usually fails here.** `station_id` &rarr; suggestions narrowest scope first (item, group, module, generic) plus `previously_used`, the wordings already recorded for the item |
+| GET | `/masters/supervisors` | `department_id`, `station_id`, `q`; both filters look through the link tables, and each row carries its `stations` and `departments` |
+| GET | `/masters/supervisors/:id` | One supervisor with every station and department link, and the coverage rows |
 | GET | `/masters/supervisors/resolve` | **Smart assignment.** `station_id`, `unit_id`, `department_id`, `item_id` &rarr; ranked candidates, `auto_selected` and `match_reason` |
 | GET | `/masters/departments`, `/severities`, `/categories`, `/inspection-types`, `/parameters`, `/rule-references`, `/modules`, `/contractors` | Reference lists |
 
@@ -124,6 +126,7 @@ Booleans accept `1/0`, `true/false`, `yes/no`, `on/off`.
 | GET | `/dashboard/departments` | Department-wise workload and closure time |
 | GET | `/dashboard/stations` | Station-wise, with the module split |
 | GET | `/dashboard/severity`, `/categories`, `/trends`, `/repeats`, `/supervisors` | Analytics |
+| GET | `/dashboard/deficiencies` | Most reported deficiencies, counted from the suggestion the inspector picked rather than by matching text |
 | GET | `/history/stations/:id` | Complete station history, summary and repeats |
 | GET | `/history/stations/:id/compare` | Previous vs current inspection |
 | GET | `/history/trains`, `/history/trains/:id` | Train register and history |
@@ -144,6 +147,23 @@ Booleans accept `1/0`, `true/false`, `yes/no`, `on/off`.
 | GET | `/reports/inspection/:id` | Full inspection report; the PDF carries photographs, signatures and a QR code |
 | GET | `/reports/verify/:token` | **Public** QR verification |
 
+## Inspection notes
+
+Several observations compiled into one numbered letter in the office format. A note is stored
+rather than rendered on demand, because it is a record: its number and its wording stay as they
+were issued, while the status of each observation it cites is read live.
+
+| Method | Path | Notes |
+| --- | --- | --- |
+| GET | `/notes/draft` | `inspection_id`, or `observation_ids` as a comma-separated list. Returns the observations that would go in, the next number, a suggested subject and the standing wording |
+| GET | `/notes/defaults` | The letterhead, office, addressee and standing paragraphs |
+| GET | `/notes` | `inspection_id`, `station_id`, `status`, `mine`, paging |
+| POST | `/notes` | `note:create`. Either `inspection_id` or `observation_ids`; `status: issued` issues it straight away |
+| GET | `/notes/:id` | The note with its observations and `by_department` |
+| PATCH | `/notes/:id` | Wording and status. An issued note can only be cancelled, not reworded |
+| GET | `/notes/:id/print` | `format=pdf\|csv\|json`, `group_by_department=1`. The PDF is the letter: letterhead, number and date, subject, the observations tabulated, signature block and copy-to |
+| GET | `/notes/verify/:token` | **Public** verification of a printed note |
+
 ## Offline sync
 
 | Method | Path | Notes |
@@ -162,6 +182,8 @@ Booleans accept `1/0`, `true/false`, `yes/no`, `on/off`.
 | PATCH | `/admin/masters/:resource/:id` | Admin only |
 | DELETE | `/admin/masters/:resource/:id` | Deactivates; `?hard=true` deletes where there is no history |
 | PUT | `/admin/items/:id/parameters` | Sets the checklist parameters for an item |
+| GET | `/admin/stations/export` | The station list as CSV, in the shape the importer accepts |
+| POST | `/admin/stations/import` | Admin only. `csv`, `dry_run`, `deactivate_missing`. Identified by station code: a known code is updated, a new one is added, nothing is deleted. The response reports what was added, updated, deactivated and skipped, with a reason per skipped row |
 | GET/POST/PATCH | `/admin/users`, `/admin/users/:id` | User administration |
 | POST | `/admin/users/:id/reset-password` | Issues a temporary password |
 | GET/PUT | `/admin/settings` | Application settings |
