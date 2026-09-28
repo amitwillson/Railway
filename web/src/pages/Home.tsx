@@ -189,10 +189,22 @@ export default function Home() {
 }
 
 /** "R. K. Sharma" has no usable first name, so fall back to the full name. */
+/**
+ * How to address whoever is signed in.
+ *
+ * Accounts are held by posts as often as by people, and "Good morning, Chief" is
+ * not how you greet the Chief Commercial Inspector. A name carrying a slash or a
+ * designation word is a post and is used whole; a personal name gives its first
+ * name, unless that is an initial, in which case the whole name reads better.
+ */
+const POST_WORDS = /\b(manager|inspector|officer|supervisor|sse|je|aen|iow|administrator|superintendent|master|engineer)\b/i;
+
 function firstName(name?: string | null): string {
   if (!name) return 'Officer';
-  const first = name.trim().split(/\s+/)[0] ?? '';
-  return first.length <= 2 || first.endsWith('.') ? name : first;
+  const trimmed = name.trim();
+  if (trimmed.includes('/') || POST_WORDS.test(trimmed)) return trimmed;
+  const first = trimmed.split(/\s+/)[0] ?? '';
+  return first.length <= 2 || first.endsWith('.') ? trimmed : first;
 }
 
 function greeting(): string {
