@@ -280,6 +280,31 @@ router.delete('/masters/:resource/:id', requireRole(ROLES.ADMIN), (req, res) => 
 
 const STATION_IMPORT_COLUMNS = ['code', 'name', 'division', 'zone', 'category', 'station_type', 'section', 'platforms', 'latitude', 'longitude', 'active'];
 
+/**
+ * Header names a divisional office actually sends. A file prepared in the works
+ * office says "Station Code" and "No. of Platforms", not "code" and "platforms",
+ * and refusing it over a column heading would be a poor reason to make somebody
+ * retype a station list. Headers are lower-cased and spaces become underscores
+ * before this map is applied, so one entry covers "Station Code", "STATION CODE"
+ * and "station_code" alike.
+ */
+const STATION_HEADER_ALIASES = {
+  station_code: 'code', stn_code: 'code', code_no: 'code', abbreviation: 'code',
+  station: 'name', station_name: 'name', stn_name: 'name', name_of_station: 'name',
+  div: 'division', division_code: 'division', divn: 'division',
+  railway: 'zone', zone_code: 'zone',
+  nsg_category: 'category', station_category: 'category', categorisation: 'category',
+  type: 'station_type', station_class: 'station_type', class: 'station_type',
+  block_section: 'section', line: 'section', route: 'section',
+  no_of_platforms: 'platforms', number_of_platforms: 'platforms', pf: 'platforms',
+  platform: 'platforms', platforms_available: 'platforms',
+  lat: 'latitude', long: 'longitude', lng: 'longitude',
+  in_use: 'active', working: 'active',
+};
+
+/** Renames the headers an office file uses to the ones the importer reads. */
+const normaliseStationHeader = (header) => header.map((h) => STATION_HEADER_ALIASES[h] ?? h);
+
 router.get('/stations/export', requireRole(ROLES.ADMIN, ROLES.OFFICER), (_req, res) => {
   const rows = all(
     `SELECT s.code, s.name, d.code AS division, z.code AS zone, s.category, s.station_type,
@@ -313,10 +338,16 @@ router.post(
     })
   ),
   (req, res) => {
-    const parsed = parseCsv(req.body.csv);
+    const parsed = parseCsv(req.body.csv, normaliseStationHeader);
     if (!parsed.rows.length) throw badRequest('No data rows found below the header');
     const missing = ['code', 'name'].filter((c) => !parsed.header.includes(c));
-    if (missing.length) throw badRequest(`The CSV must have a ${missing.join(' and ')} column`);
+    if (missing.length) {
+      throw badRequest(
+        `The CSV must have a ${missing.join(' and ')} column. `
+          + `Found: ${parsed.header.join(', ')}. `
+          + '"Station Code" and "Station Name" are understood as well.'
+      );
+    }
 
     const divisions = new Map(all('SELECT id, code FROM divisions').map((d) => [d.code.toUpperCase(), d.id]));
     const zones = new Map(all('SELECT id, code FROM zones').map((z_) => [z_.code.toUpperCase(), z_.id]));
@@ -428,7 +459,7 @@ const boolFrom = (v) => (['0', 'false', 'no', 'n', ''].includes(String(v).trim()
  * LF line endings, and a UTF-8 BOM (which is what Excel writes). Enough for a
  * station list, and one less dependency than a parser library.
  */
-function parseCsv(text) {
+function parseCsv(text, renameHeader = (h) => h) {
   const rows = [];
   let row = [];
   let field = '';
@@ -468,7 +499,9 @@ function parseCsv(text) {
   if (row.some((c) => c.trim() !== '')) rows.push(row);
   if (rows.length === 0) return { header: [], rows: [] };
 
-  const header = rows[0].map((h) => h.trim().toLowerCase().replace(/\s+/g, '_'));
+  const header = renameHeader(
+    rows[0].map((h) => h.trim().toLowerCase().replace(/[.\s]+/g, '_').replace(/_+$/, ''))
+  );
   return {
     header,
     rows: rows.slice(1).map((cells) =>

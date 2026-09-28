@@ -359,10 +359,12 @@ function StationImport({ onClose, onDone }: { onClose: () => void; onDone: () =>
       }
     >
       <Banner tone="info">
-        The header must carry at least <code>code</code> and <code>name</code>; <code>division</code>,{' '}
-        <code>zone</code>, <code>category</code>, <code>station_type</code>, <code>section</code>,{' '}
-        <code>platforms</code>, <code>latitude</code>, <code>longitude</code> and <code>active</code> are optional. A
-        code already in the master is updated; a new one is added. Nothing is ever deleted.
+        The file needs a station code and a station name; division, zone, category, station type,
+        section, platforms, latitude, longitude and active are optional. Column headings do not have
+        to match exactly &mdash; <code>Station Code</code>, <code>STN CODE</code> and <code>code</code>
+        are all read as the same column, as are <code>No. of Platforms</code> and{' '}
+        <code>platforms</code>. A code already in the master is updated; a new one is added. Nothing
+        is ever deleted.
       </Banner>
 
       <div className="row row--wrap" style={{ gap: 8, margin: '12px 0' }}>
@@ -396,7 +398,10 @@ function StationImport({ onClose, onDone }: { onClose: () => void; onDone: () =>
             setCsv(e.target.value);
             setResult(null);
           }}
-          placeholder={'code,name,division,zone,category,station_type,section,platforms\nJBP,Jabalpur,JBP,WCR,NSG-2,Junction,Katni - Itarsi,6'}
+          placeholder={
+            'Station Code,Station Name,Division,Zone,Category,Station Type,Section,No. of Platforms\n'
+            + 'JBP,Jabalpur,JBP,WCR,NSG-2,Junction,Katni - Itarsi,6'
+          }
         />
       </Field>
 

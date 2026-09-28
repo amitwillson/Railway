@@ -355,6 +355,33 @@ describe('the station list', () => {
     db.run('UPDATE stations SET active = 1');
   });
 
+  test('reads the column headings an office file actually carries', async () => {
+    // A file prepared in the works office does not say "code" and "platforms".
+    const office = [
+      'Station Code,Station Name,Division,Zone,NSG Category,Station Type,Block Section,No. of Platforms',
+      'NU,Narsinghpur,JBP,WCR,NSG-5,Station,Katni - Itarsi,3',
+      'GAR,Gadarwara,JBP,WCR,NSG-5,Station,Katni - Itarsi,3',
+    ].join('\n');
+    const response = await auth(request(app).post('/api/admin/stations/import'), adminToken).send({ csv: office });
+    assert.equal(response.status, 200, JSON.stringify(response.body));
+    assert.equal(response.body.counts.skipped, 0, JSON.stringify(response.body.skipped));
+    assert.equal(response.body.counts.created, 2);
+    const station = db.get("SELECT * FROM stations WHERE code = 'NU'");
+    assert.equal(station.name, 'Narsinghpur');
+    assert.equal(station.category, 'NSG-5');
+    assert.equal(station.section, 'Katni - Itarsi');
+    assert.equal(station.platforms, 3);
+  });
+
+  test('says which headings it found when the required ones are missing', async () => {
+    const response = await auth(request(app).post('/api/admin/stations/import'), adminToken).send({
+      csv: 'Serial,Place,Remarks\n1,Somewhere,none',
+    });
+    assert.equal(response.status, 400);
+    assert.match(response.body.error.message, /must have a code and name column/);
+    assert.match(response.body.error.message, /Found: serial, place, remarks/);
+  });
+
   test('only an administrator may import', async () => {
     const response = await auth(request(app).post('/api/admin/stations/import'), inspectorToken).send({ csv });
     assert.equal(response.status, 403);

@@ -279,10 +279,12 @@ Two screens are purpose-built because the generic table editor is the wrong tool
 * **Stations &rarr; Import** &mdash; the station list is the one master every division has to replace
   with its own, and editing forty stations one at a time is not a reasonable way to do it. Export
   gives the current list in exactly the shape the importer accepts; import identifies a station by
-  its code, so a known code is updated and a new one added. **Check** shows what the file would do
-  before anything is written, and names the line and the reason for every row it would skip. Nothing
-  is ever deleted: a station left out of the file can be deactivated, and stays in the database so
-  that past observations still resolve.
+  its code, so a known code is updated and a new one added. Column headings do not have to match
+  exactly: a file prepared in the works office saying `Station Code` and `No. of Platforms` is read
+  as it stands. **Check** shows what the file would do before anything is written, and names the line
+  and the reason for every row it would skip. Nothing is ever deleted: a station left out of the file
+  can be deactivated, and stays in the database so that past observations still resolve.
+  [Handing the station list over &rarr;](docs/STATION-LIST.md)
 
 Every state-changing action writes an audit row with the user, role, timestamp, action, entity and
 the **previous and new value**. Submitted observations are never silently modified: the text can be
@@ -400,3 +402,5 @@ Inspection Note is seeded too, so the letter format is visible without having to
 
 * [`docs/API.md`](docs/API.md) &mdash; every endpoint, its parameters and its access rules
 * [`docs/DATA-MODEL.md`](docs/DATA-MODEL.md) &mdash; tables, relationships and the derived fields
+* [`docs/STATION-LIST.md`](docs/STATION-LIST.md) &mdash; putting the division's own station list in,
+  with [a template](docs/station-list-template.csv) to send to the works office

@@ -2700,7 +2700,25 @@ on('DELETE', '/admin/masters/:resource/:id', ({ params, user }) => {
  * a dry run writes nothing, and a station left out is deactivated rather than
  * deleted so that past observations still resolve.
  */
-const parseCsv = (text: string) => {
+/**
+ * Header names a divisional office actually sends. A file prepared in the works
+ * office says "Station Code" and "No. of Platforms", not "code" and "platforms".
+ */
+const STATION_HEADER_ALIASES: Record<string, string> = {
+  station_code: 'code', stn_code: 'code', code_no: 'code', abbreviation: 'code',
+  station: 'name', station_name: 'name', stn_name: 'name', name_of_station: 'name',
+  div: 'division', division_code: 'division', divn: 'division',
+  railway: 'zone', zone_code: 'zone',
+  nsg_category: 'category', station_category: 'category', categorisation: 'category',
+  type: 'station_type', station_class: 'station_type', class: 'station_type',
+  block_section: 'section', line: 'section', route: 'section',
+  no_of_platforms: 'platforms', number_of_platforms: 'platforms', pf: 'platforms',
+  platform: 'platforms', platforms_available: 'platforms',
+  lat: 'latitude', long: 'longitude', lng: 'longitude',
+  in_use: 'active', working: 'active',
+};
+
+const parseCsv = (text: string, renameHeader: (h: string[]) => string[] = (h) => h) => {
   const rows: string[][] = [];
   let row: string[] = [];
   let field = '';
@@ -2736,7 +2754,9 @@ const parseCsv = (text: string) => {
   row.push(field);
   if (row.some((c) => c.trim() !== '')) rows.push(row);
   if (rows.length === 0) return { header: [] as string[], rows: [] as Row[] };
-  const header = rows[0].map((h) => h.trim().toLowerCase().replace(/\s+/g, '_'));
+  const header = renameHeader(
+    rows[0].map((h) => h.trim().toLowerCase().replace(/[.\s]+/g, '_').replace(/_+$/, ''))
+  );
   return {
     header,
     rows: rows.slice(1).map((cells) =>
@@ -2749,10 +2769,15 @@ on('POST', '/admin/stations/import', ({ body, user }) => {
   if (!isAdmin(user)) throw forbidden('This action is restricted to: admin');
   const csv = String(body?.csv ?? '');
   if (csv.trim().length < 10) throw bad('Paste the CSV, including its header row');
-  const parsed = parseCsv(csv);
+  const parsed = parseCsv(csv, (header) => header.map((h) => STATION_HEADER_ALIASES[h] ?? h));
   if (!parsed.rows.length) throw bad('No data rows found below the header');
   const missing = ['code', 'name'].filter((c) => !parsed.header.includes(c));
-  if (missing.length) throw bad(`The CSV must have a ${missing.join(' and ')} column`);
+  if (missing.length) {
+    throw bad(
+      `The CSV must have a ${missing.join(' and ')} column. Found: ${parsed.header.join(', ')}. `
+        + '"Station Code" and "Station Name" are understood as well.'
+    );
+  }
 
   const dryRun = Boolean(body?.dry_run);
   const created: Row[] = [];
