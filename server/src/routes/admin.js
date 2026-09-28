@@ -31,12 +31,26 @@ const RESOURCES = {
     columns: ['code', 'name', 'is_external', 'sort_order', 'active'],
     order: 'sort_order, name',
   },
+  sections: {
+    table: 'sections',
+    label: 'Section',
+    columns: ['code', 'name', 'division_id', 'sort_order', 'active'],
+    order: 'sort_order',
+    search: ['code', 'name'],
+  },
   stations: {
     table: 'stations',
     label: 'Station',
-    columns: ['code', 'name', 'division_id', 'zone_id', 'category', 'station_type', 'section', 'platforms', 'latitude', 'longitude', 'active'],
-    order: 'name',
-    search: ['code', 'name'],
+    columns: ['code', 'name', 'division_id', 'zone_id', 'category', 'station_type', 'section', 'platforms', 'state', 'district', 'route', 'km', 'latitude', 'longitude', 'active'],
+    order: 'section, km, name',
+    search: ['code', 'name', 'section'],
+  },
+  station_amenity_norms: {
+    table: 'station_amenity_norms',
+    label: 'Amenity norm (MEA)',
+    columns: ['station_id', 'item_id', 'item_label', 'unit', 'provided', 'required', 'source'],
+    order: 'station_id, item_label',
+    search: ['item_label'],
   },
   trains: {
     table: 'trains',
@@ -278,7 +292,7 @@ router.delete('/masters/:resource/:id', requireRole(ROLES.ADMIN), (req, res) => 
 /* list in the exact shape the importer accepts, so the round trip is safe.    */
 /* -------------------------------------------------------------------------- */
 
-const STATION_IMPORT_COLUMNS = ['code', 'name', 'division', 'zone', 'category', 'station_type', 'section', 'platforms', 'latitude', 'longitude', 'active'];
+const STATION_IMPORT_COLUMNS = ['code', 'name', 'division', 'zone', 'category', 'station_type', 'section', 'platforms', 'state', 'district', 'route', 'km', 'latitude', 'longitude', 'active'];
 
 /**
  * Header names a divisional office actually sends. A file prepared in the works
@@ -297,6 +311,7 @@ const STATION_HEADER_ALIASES = {
   type: 'station_type', station_class: 'station_type', class: 'station_type',
   block_section: 'section', line: 'section', route: 'section',
   no_of_platforms: 'platforms', number_of_platforms: 'platforms', pf: 'platforms',
+  chainage: 'km', km_: 'km', kilometre: 'km', distance: 'km',
   platform: 'platforms', platforms_available: 'platforms',
   lat: 'latitude', long: 'longitude', lng: 'longitude',
   in_use: 'active', working: 'active',
@@ -308,11 +323,12 @@ const normaliseStationHeader = (header) => header.map((h) => STATION_HEADER_ALIA
 router.get('/stations/export', requireRole(ROLES.ADMIN, ROLES.OFFICER), (_req, res) => {
   const rows = all(
     `SELECT s.code, s.name, d.code AS division, z.code AS zone, s.category, s.station_type,
-            s.section, s.platforms, s.latitude, s.longitude, s.active
+            s.section, s.platforms, s.state, s.district, s.route, s.km,
+            s.latitude, s.longitude, s.active
        FROM stations s
        JOIN divisions d ON d.id = s.division_id
        JOIN zones z ON z.id = s.zone_id
-      ORDER BY s.section, s.name`
+      ORDER BY s.section, s.km, s.name`
   );
   res.type('text/csv');
   res.setHeader('content-disposition', 'attachment; filename="stations.csv"');
@@ -393,6 +409,10 @@ router.post(
         station_type: blankToNull(row.station_type) ?? existing?.station_type ?? null,
         section: blankToNull(row.section) ?? existing?.section ?? null,
         platforms: numberOr(row.platforms, existing?.platforms ?? 0),
+        state: blankToNull(row.state) ?? existing?.state ?? null,
+        district: blankToNull(row.district) ?? existing?.district ?? null,
+        route: blankToNull(row.route) ?? existing?.route ?? null,
+        km: row.km === undefined || row.km === '' ? existing?.km ?? null : numberOr(row.km, null),
         latitude: row.latitude === undefined || row.latitude === '' ? existing?.latitude ?? null : numberOr(row.latitude, null),
         longitude: row.longitude === undefined || row.longitude === '' ? existing?.longitude ?? null : numberOr(row.longitude, null),
         active: row.active === undefined || row.active === '' ? existing?.active ?? 1 : boolFrom(row.active),

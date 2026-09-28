@@ -70,10 +70,10 @@ const { data: masters } = await call('GET', '/masters/bootstrap', { token: inspe
 check('three inspection modules', masters.modules?.length === 3, masters.modules?.map((m) => m.code).join(', '));
 check('inspection items are loaded', masters.counts?.items > 100, `${masters.counts?.items} items`);
 
-const { data: stations } = await call('GET', '/masters/stations', { token: inspector, params: { q: 'jabal' } });
-const station = stations.data[0];
-check('station search returns Jabalpur with its details', station?.code === 'JBP',
-  `${station?.name} | ${station?.division_name} Division | ${station?.category} | ${station?.station_type}`);
+const { data: stations } = await call('GET', '/masters/stations', { token: inspector, params: { q: 'bilaspur' } });
+const station = stations.data.find((s) => s.code === 'BSP');
+check('station search returns the divisional headquarters with its details', station?.code === 'BSP',
+  `${station?.name} | ${station?.division_name} Division | ${station?.category} | ${station?.station_type} | ${station?.section_name}`);
 
 const { data: units } = await call('GET', '/masters/units', { token: inspector, params: { station_id: station.id } });
 const unit = units.data.find((u) => u.name === 'Platform No. 2');
@@ -343,10 +343,10 @@ check('the current station list exports as CSV', exportRes.status === 200);
 const { data: dryRun } = await call('POST', '/admin/stations/import', {
   token: admin,
   body: {
-    csv: 'code,name,division,zone,category,station_type,section,platforms\n'
-      + 'JBP,Jabalpur,JBP,WCR,NSG-2,Junction,Katni - Itarsi,6\n'
-      + 'SMOKE,Smoke Test Halt,JBP,WCR,NSG-6,Halt,Katni - Itarsi,1\n'
-      + 'BAD,Unknown division,QQQ,WCR,,,,1',
+    csv: 'Station Code,Station Name,Division,Zone,Category,Station Type,Section,No. of Platforms\n'
+      + 'BSP,Bilaspur,BSP,SECR,NSG-2,Junction,JSG-BSP,8\n'
+      + 'SMOKE,Smoke Test Halt,BSP,SECR,HG-3,Halt,JSG-BSP,1\n'
+      + 'BAD,Unknown division,QQQ,SECR,,,,1',
     dry_run: true,
   },
 });
@@ -355,6 +355,42 @@ check('a dry run reports what would change and writes nothing',
   JSON.stringify(dryRun.counts));
 const { data: before } = await call('GET', '/masters/stations', { token: admin, params: { q: 'Smoke', limit: 5 } });
 check('the dry run left the master alone', before.data.length === 0);
+
+heading('15. The divisional record');
+const { data: sectionList } = await call('GET', '/masters/sections', { token: inspector });
+check('the division is laid out by section', sectionList.data.length > 0,
+  sectionList.data.map((x) => `${x.code}:${x.station_count}`).join(' '));
+const onSection = await call('GET', '/masters/stations', {
+  token: inspector, params: { section: sectionList.data[0].code, limit: 200 },
+});
+check('stations can be listed by section',
+  onSection.data.data.length === sectionList.data[0].station_count,
+  `${sectionList.data[0].code}: ${onSection.data.data.length} stations`);
+
+const { data: stationRecord } = await call('GET', `/masters/stations/${station.id}`, { token: inspector });
+check('the station carries its divisional details',
+  Boolean(stationRecord.section && stationRecord.state && stationRecord.km),
+  `${stationRecord.section_name} | ${stationRecord.state} | km ${stationRecord.km} | ${stationRecord.platforms} platforms`);
+check('the PAMS facility record is served with it', Boolean(stationRecord.facilities),
+  stationRecord.facilities
+    ? `${stationRecord.facilities.passengers_per_day} passengers a day, ${stationRecord.facilities.booking_windows} booking windows, IOW ${stationRecord.facilities.iow_unit}`
+    : 'missing');
+check('the unit list matches the platforms the station actually has',
+  stationRecord.units.filter((u) => u.kind === 'platform').length === stationRecord.platforms,
+  `${stationRecord.units.filter((u) => u.kind === 'platform').length} platform areas for ${stationRecord.platforms} platforms`);
+check('every supervisor who answers for the station is listed', stationRecord.supervisors.length > 1,
+  `${stationRecord.supervisors.length} posts, ${stationRecord.supervisors.filter((x) => x.posted_here).length} posted here`);
+
+check('the minimum essential amenities are recorded', stationRecord.amenity_norms.length > 0,
+  `${stationRecord.amenity_norms.length} norm items, ${stationRecord.amenity_norms.filter((n) => !n.meets_norm).length} below the norm`);
+// The norm the New Inspection screen asks for, against the item it is recorded
+// under: "Water Coolers" is a norm item, and it maps to the Water Cooler item.
+const normItemId = stationRecord.amenity_norms.find((n) => n.item_id)?.item_id;
+const { data: itemNorm } = await call('GET', `/masters/stations/${station.id}/norms`, {
+  token: inspector, params: { item_id: normItemId },
+});
+check('the norm for one item is served to the inspection screen', itemNorm.data.length > 0,
+  itemNorm.data.map((n) => `${n.item_label}: ${n.provided} provided / ${n.required} required ${n.unit}`).join(', '));
 
 console.log(`\n${failures.length ? `${failures.length} of ${checks} checks FAILED:\n - ${failures.join('\n - ')}` : `All ${checks} checks passed.`}\n`);
 process.exit(failures.length ? 1 : 0);

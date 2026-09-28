@@ -12,13 +12,14 @@ Sign in with any of these (the sign-in screen lists them all), password `Railway
 | `CMI01` | Inspecting officer | New Inspection, repeated-deficiency warning, verification queue |
 | `SSEEL01` | Supervisor | Compliance queue, acknowledge and submit compliance |
 | `SRDCM01` | Divisional officer | Dashboards, station history, reports |
-| `ADMIN01` | Administrator | Admin panel over all 24 masters, supervisor links, station import, audit trail |
+| `ADMIN01` | Administrator | Admin panel over all 27 masters, supervisor links, station import, audit trail |
 
 ## Suggested walkthrough
 
-1. **`CMI01` &rarr; New Inspection.** Type `jabal` in Station, pick Platform No. 2, then Water
-   Cooler. The repeated-deficiency banner appears before you submit, and the concerned supervisor is
-   filled in with the reason for the match.
+1. **`CMI01` &rarr; New Inspection.** Type `pendra` in Station, pick Platform No. 2, then Water
+   Cooler. The division's MEA position appears &mdash; *3 water coolers provided against 4 required* &mdash;
+   the repeated-deficiency banner shows for a recurrence, and the concerned supervisor is filled in
+   with the reason for the match (here, the section SSE who covers Pendra Road).
 2. Open **Suggested deficiency** and pick *Water cooler is not functioning.* &mdash; the wording, the
    department and the TDC are filled in together. Submit.
 3. **Stay on the screen and record a second one.** Change the Amenity to Toilet, pick a suggestion
@@ -32,12 +33,18 @@ Sign in with any of these (the sign-in screen lists them all), password `Railway
 6. **Back as `CMI01`.** Verify it: reject it once (a reason is mandatory) and watch it reopen, then
    accept the next round and see it close with the full timeline.
 7. **`SRDCM01` &rarr; Dashboard &rarr; Repeated** for the most-reported deficiencies and the
-   recurring ones, and **Station History** for the previous-vs-current inspection comparison.
+   recurring ones, and **Station History** for the previous-vs-current inspection comparison. Open
+   any station and the **Facilities & norms** tab shows the divisional record: what the station has,
+   and where it stands against the minimum essential amenities.
 8. **`ADMIN01` &rarr; Admin &rarr; Supervisors** to see which stations and departments each
    supervisor answers for, and **Master data &rarr; Station &rarr; Import** to paste a CSV and press
    *Check* &mdash; it reports what would change without writing anything.
 
 ## What is real and what is not
+
+The station data is the division's own: 89 stations on 8 sections, with their PAMS facility record
+and their minimum-essential-amenity position. Names are not &mdash; every account and supervisor is a
+post ("SSE/Works - Champa"), because the nomination is the division's to make.
 
 Everything you do is genuinely executed: reference numbers, supervisor assignment, repeated-
 deficiency detection, notifications with per-channel delivery status, the timeline, the audit trail,

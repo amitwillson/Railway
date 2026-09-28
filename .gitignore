@@ -9,8 +9,9 @@ build/
 web/dist/
 *.tsbuildinfo
 
-# runtime data
-data/
+# runtime data (the SQLite file and its journals live in server/data)
+/server/data/
+/data/
 *.sqlite
 *.sqlite3
 *.db

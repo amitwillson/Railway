@@ -17,15 +17,19 @@ import { hashPassword } from '../lib/auth.js';
 import { nextRef, randomToken, uuid } from '../lib/ids.js';
 import { dispatch } from '../lib/notify.js';
 import {
-  zones, divisions, departments, stations, trains, stationUnits, trainUnits,
+  departments, trains, stationUnits, trainUnits,
   extraStationUnits, modules, inspectionTypes, itemParameters, observationCategories,
   severities, tdcRules, escalationLevels, notificationRules, settings, ruleReferences,
 } from './data/masters.js';
+import {
+  zones, divisions, sections, stations, stationFacilities, amenityNorms,
+  supervisorPosts as supervisors,
+} from './data/bilaspur.js';
 import { catalogue, parameterProfiles, profileForGroup } from './data/catalogue.js';
 import {
   genericDeficiencies, moduleDeficiencies, groupDeficiencies, specificDeficiencies,
 } from './data/deficiencies.js';
-import { users, supervisors, reportingChain, contractors } from './data/people.js';
+import { users, contractors } from './data/people.js';
 
 const RESET = process.argv.includes('--reset');
 const QUIET = process.argv.includes('--quiet');
@@ -134,12 +138,13 @@ function resetDatabase() {
     'reminder_log', 'notification_deliveries', 'notifications', 'report_tokens',
     'approvals', 'observation_events', 'attachments', 'compliances', 'observations',
     'inspections', 'item_parameter_map', 'inspection_items', 'item_groups',
+    'station_amenity_norms', 'station_facilities',
     'supervisor_coverage', 'supervisor_stations', 'supervisor_departments',
     'inspection_note_observations', 'inspection_notes', 'item_deficiencies',
     'supervisors', 'otp_codes', 'sessions', 'audit_log',
     'contractors', 'rule_references', 'notification_rules', 'escalation_levels',
     'tdc_rules', 'settings', 'severities', 'observation_categories', 'item_parameters',
-    'inspection_types', 'modules', 'units', 'trains', 'stations', 'users',
+    'inspection_types', 'modules', 'units', 'trains', 'stations', 'sections', 'users',
     'departments', 'divisions', 'zones',
   ];
   db.pragma('foreign_keys = OFF');
@@ -172,6 +177,16 @@ function seedMasters() {
   const deptIds = new Map();
   for (const d of departments) deptIds.set(d.code, upsert('departments', ['code'], d));
 
+  sections.forEach((sec, index) => {
+    upsert('sections', ['code'], {
+      code: sec.code,
+      name: sec.name,
+      division_id: divisionIds.get(sec.division ?? 'BSP') ?? null,
+      sort_order: (index + 1) * 10,
+      active: 1,
+    });
+  });
+
   const stationIds = new Map();
   for (const s of stations) {
     const { division, ...rest } = s;
@@ -183,6 +198,15 @@ function seedMasters() {
         zone_id: zoneIds.get(divisions.find((d) => d.code === division).zone),
       })
     );
+  }
+
+  // The PAMS facilities extract, one row per station.
+  for (const f of stationFacilities) {
+    const stationId = stationIds.get(f.station);
+    if (!stationId) continue;
+    const { station, ...rest } = f;
+    run('DELETE FROM station_facilities WHERE station_id = ?', [stationId]);
+    insert('station_facilities', { station_id: stationId, ...rest, updated_at: nowIso() });
   }
 
   const trainIds = new Map();
@@ -254,8 +278,9 @@ function seedMasters() {
   }
 
   log(
-    `  masters: ${zoneIds.size} zones, ${divisionIds.size} divisions, ${deptIds.size} departments, ` +
-      `${stationIds.size} stations, ${trainIds.size} trains, ${unitIds.size} units`
+    `  masters: ${zoneIds.size} zones, ${divisionIds.size} divisions, ${sections.length} sections, ` +
+      `${deptIds.size} departments, ${stationIds.size} stations, ${trainIds.size} trains, ` +
+      `${unitIds.size} units, ${stationFacilities.length} PAMS facility records`
   );
 
   return { zoneIds, divisionIds, deptIds, stationIds, trainIds, unitIds, moduleIds, typeIds, parameterIds, categoryIds, severityIds, ruleIds };
@@ -323,8 +348,8 @@ function seedCatalogue(ref) {
     ['CI|FSSAI compliance', 'RB-CTG-2022-07'],
     ['CI|Parcel Booking', 'IRCA-CM-22'],
     ['SR|Crowd management', 'RB-SAF-2021-03'],
-    ['SR|Unauthorised vending near coach doors', 'WCR-CML-2024-11'],
-    ['SR|Unauthorised vendors', 'WCR-CML-2024-11'],
+    ['SR|Unauthorised vending near coach doors', 'SECR-CML-2024-11'],
+    ['SR|Unauthorised vendors', 'SECR-CML-2024-11'],
   ];
   for (const [itemKey, ruleCode] of links) {
     const itemId = itemIds.get(itemKey);
@@ -389,6 +414,80 @@ function seedDeficiencies(ref, itemIds, groupIds) {
   return count;
 }
 
+/**
+ * Minimum Essential Amenities - what is provided against what the norm requires,
+ * per station. The figures come from the divisional MEA return; the link to an
+ * inspection item is by name, so the New Inspection screen can show the norm for
+ * whichever item the officer selected.
+ */
+const NORM_ITEM_TO_INSPECTION_ITEM = {
+  'Drinking Water Taps': 'Water Tap',
+  'Water Coolers': 'Water Cooler',
+  'Urinals': 'Toilet',
+  'Latrines': 'Toilet',
+  'Waiting Hall Area': 'Waiting Hall',
+  'Seating Capacity': 'Seating',
+  'Platform Shelter': 'Platform Shelter',
+  'PwD Ramp': 'Ramp',
+  'Foot Over Bridge': 'Foot Over Bridge',
+  'PA System': 'Public Address System',
+  'ETIB': 'Train Display Board',
+  'Fans': 'Fan',
+};
+
+function seedAmenityNorms(ref, itemIds) {
+  let linked = 0;
+  let count = 0;
+  const unmatched = new Set();
+  for (const n of amenityNorms) {
+    const stationId = ref.stationIds.get(n.station);
+    if (!stationId) continue;
+    const itemName = NORM_ITEM_TO_INSPECTION_ITEM[n.item];
+    const itemId = itemName ? itemIds.get(`PA|${itemName}`) ?? null : null;
+    if (itemName && !itemId) unmatched.add(`${n.item} -> ${itemName}`);
+    if (itemId) linked += 1;
+    const exists = get(
+      'SELECT id FROM station_amenity_norms WHERE station_id = ? AND item_label = ?',
+      [stationId, n.item]
+    );
+    const row = {
+      station_id: stationId,
+      item_id: itemId,
+      item_label: n.item,
+      unit: n.unit,
+      provided: n.provided,
+      required: n.required,
+      source: 'Divisional MEA return (RB 2018/LM(PA)/03/06)',
+      updated_at: nowIso(),
+    };
+    if (exists) update('station_amenity_norms', exists.id, row);
+    else insert('station_amenity_norms', row);
+    count += 1;
+  }
+  for (const miss of unmatched) log(`  ! MEA norm item has no inspection item: ${miss}`);
+  log(`  MEA norms: ${count} rows, ${linked} linked to an inspection item`);
+}
+
+/**
+ * Supervisor posts that also get a login, so that the compliance side of the
+ * workflow can be signed into. Every other post is notified through the office
+ * until the division creates its accounts.
+ */
+const SUPERVISOR_LOGINS = {
+  'ELEC-SSE-JSGBSP': 'SSEEL01',
+  'ENGG-IOW-SSEWSBSP': 'SSEEN01',
+  'ENGG-IOW-LINEBILASP': 'SSEEN02',
+  'COM-CMI-JSGBSP': 'CMIS01',
+  'COM-CCI-BSP': 'CCI01',
+  'SNT-SSE-JSGBSP': 'SSESNT01',
+  'STN-SM-BSP': 'SMBSP01',
+  'RPF-BSP': 'RPFB01',
+  'MECH-CNW-BSP': 'SSEMEC01',
+  'ACC-SSO-BSP': 'ACCB01',
+  'MED-DMO-BSP': 'MEDB01',
+  'OPS-CYM-BSP': 'OPSB01',
+};
+
 function seedPeople(ref) {
   const password = hashPassword(config.seed.defaultPassword);
   const userIds = new Map();
@@ -414,22 +513,23 @@ function seedPeople(ref) {
   const supervisorIds = new Map();
   for (const s of supervisors) {
     let userId = null;
-    if (s.user) {
+    const login = SUPERVISOR_LOGINS[s.employee_id];
+    if (login) {
       userId = upsert('users', ['employee_id'], {
-        employee_id: s.user.employee_id,
+        employee_id: login,
         name: s.name,
         designation: s.designation,
-        role: s.user.role ?? 'supervisor',
+        role: 'supervisor',
         email: s.email ?? null,
         mobile: s.mobile ?? null,
         password_hash: password,
         department_id: ref.deptIds.get(s.department) ?? null,
-        division_id: ref.divisionIds.get('JBP') ?? null,
-        zone_id: ref.zoneIds.get('WCR') ?? null,
+        division_id: ref.divisionIds.get('BSP') ?? null,
+        zone_id: ref.zoneIds.get('SECR') ?? null,
         station_id: s.station ? ref.stationIds.get(s.station) : null,
         active: 1,
       });
-      userIds.set(s.user.employee_id, userId);
+      userIds.set(login, userId);
     }
     const id = upsert('supervisors', ['employee_id'], {
       employee_id: s.employee_id,
@@ -449,35 +549,44 @@ function seedPeople(ref) {
     supervisorIds.set(s.employee_id, id);
   }
 
-  // Reporting chain, then coverage (both need every supervisor to exist first).
-  for (const [child, parent] of Object.entries(reportingChain)) {
-    const childId = supervisorIds.get(child);
-    const parentId = supervisorIds.get(parent);
-    if (childId && parentId) update('supervisors', childId, { reporting_officer_id: parentId });
+  // Reporting chain: a section post reports to the divisional post of the same
+  // department, which is the structure whether or not the names are filled in.
+  const divisionalOf = new Map();
+  for (const s of supervisors) {
+    if (s.is_default_for_department) divisionalOf.set(s.department, supervisorIds.get(s.employee_id));
+  }
+  for (const s of supervisors) {
+    const parentId = divisionalOf.get(s.department);
+    const childId = supervisorIds.get(s.employee_id);
+    if (childId && parentId && childId !== parentId) {
+      update('supervisors', childId, { reporting_officer_id: parentId });
+    }
   }
 
+  // Explicit coverage, kept for the areas a post answers for at its own station.
   let coverageCount = 0;
   for (const s of supervisors) {
-    for (const c of s.coverage ?? []) {
-      const row = {
-        supervisor_id: supervisorIds.get(s.employee_id),
-        station_id: c.station ? ref.stationIds.get(c.station) ?? null : null,
-        unit_id: c.unit ? ref.unitIds.get(`station|${c.unit}`) ?? null : null,
-        unit_kind: c.unit_kind ?? null,
-        item_group_id: null,
-        priority: c.priority ?? 100,
-        active: 1,
-      };
-      const exists = get(
-        `SELECT 1 FROM supervisor_coverage
-          WHERE supervisor_id = ? AND IFNULL(station_id,0) = IFNULL(?,0)
-            AND IFNULL(unit_id,0) = IFNULL(?,0) AND IFNULL(unit_kind,'') = IFNULL(?,'')`,
-        [row.supervisor_id, row.station_id, row.unit_id, row.unit_kind]
-      );
-      if (!exists) {
-        insert('supervisor_coverage', row);
-        coverageCount += 1;
-      }
+    const supervisorId = supervisorIds.get(s.employee_id);
+    const stationId = s.station ? ref.stationIds.get(s.station) : null;
+    if (!supervisorId || !stationId) continue;
+    const row = {
+      supervisor_id: supervisorId,
+      station_id: stationId,
+      unit_id: null,
+      unit_kind: null,
+      item_group_id: null,
+      priority: 20,
+      active: 1,
+    };
+    const exists = get(
+      `SELECT 1 FROM supervisor_coverage
+        WHERE supervisor_id = ? AND IFNULL(station_id,0) = IFNULL(?,0)
+          AND unit_id IS NULL AND unit_kind IS NULL`,
+      [supervisorId, stationId]
+    );
+    if (!exists) {
+      insert('supervisor_coverage', row);
+      coverageCount += 1;
     }
   }
 
@@ -582,11 +691,11 @@ const demoInspections = [
     module: 'PA',
     type: 'Passenger Amenities Inspection',
     location_type: 'Station',
-    station: 'JBP',
+    station: 'BSP',
     inspector: 'CMI01',
     days_ago: 0,
     status: 'in_progress',
-    title: 'Passenger amenities inspection - Jabalpur',
+    title: 'Passenger amenities inspection - Bilaspur',
     observations: [
       {
         unit: 'Platform No. 2',
@@ -618,7 +727,7 @@ const demoInspections = [
       {
         unit: 'Platform No. 1',
         item: 'Coach Guidance',
-        text: 'Coach guidance display at the middle of Platform No. 1 is blank. Passengers are unable to locate coach positions for train 12189.',
+        text: 'Coach guidance display at the middle of Platform No. 1 is blank. Passengers are unable to locate coach positions for train 18237.',
         deficiency: 'Coach guidance display not working at this platform',
         dept: 'SNT',
         severity: 'Major',
@@ -644,11 +753,11 @@ const demoInspections = [
     module: 'PA',
     type: 'Routine Inspection',
     location_type: 'Station',
-    station: 'JBP',
+    station: 'BSP',
     inspector: 'ACM01',
     days_ago: 34,
     status: 'completed',
-    title: 'Routine amenities inspection - Jabalpur',
+    title: 'Routine amenities inspection - Bilaspur',
     observations: [
       {
         unit: 'Platform No. 2',
@@ -692,11 +801,11 @@ const demoInspections = [
     module: 'PA',
     type: 'Surprise Inspection',
     location_type: 'Platform',
-    station: 'JBP',
+    station: 'BSP',
     inspector: 'CMI01',
     days_ago: 74,
     status: 'completed',
-    title: 'Surprise inspection of platform amenities - Jabalpur',
+    title: 'Surprise inspection of platform amenities - Bilaspur',
     observations: [
       {
         unit: 'Platform No. 2',
@@ -742,11 +851,11 @@ const demoInspections = [
     module: 'CI',
     type: 'Commercial Inspection',
     location_type: 'Station',
-    station: 'JBP',
+    station: 'BSP',
     inspector: 'ACM01',
     days_ago: 9,
     status: 'completed',
-    title: 'Commercial inspection - Jabalpur',
+    title: 'Commercial inspection - Bilaspur',
     observations: [
       {
         unit: 'Catering Area',
@@ -818,16 +927,16 @@ const demoInspections = [
     module: 'SR',
     type: 'Safe Running - Commercial Inspection',
     location_type: 'Platform',
-    station: 'JBP',
+    station: 'BSP',
     inspector: 'CMI01',
     days_ago: 4,
     status: 'completed',
-    title: 'Safe running (commercial) inspection - Jabalpur platforms',
+    title: 'Safe running (commercial) inspection - Bilaspur platforms',
     observations: [
       {
         unit: 'Platform No. 3',
         item: 'Unauthorised vending near coach doors',
-        text: 'Four unauthorised vendors were selling eatables right at the coach doors of train 11265 while passengers were boarding, obstructing entry and creating a risk of passengers falling.',
+        text: 'Four unauthorised vendors were selling eatables right at the coach doors of train 18238 while passengers were boarding, obstructing entry and creating a risk of passengers falling.',
         deficiency: 'Unauthorised vendors operating at the coach doors during boarding',
         dept: 'RPF',
         severity: 'Critical',
@@ -856,7 +965,7 @@ const demoInspections = [
       {
         unit: 'Platform No. 1',
         item: 'Reservation chart/display',
-        text: 'Reservation charts of train 12189 were not pasted on the coach as well as on the platform chart display board at the scheduled time.',
+        text: 'Reservation charts of train 18237 were not pasted on the coach as well as on the platform chart display board at the scheduled time.',
         dept: 'COM',
         severity: 'Major',
         category: 'Passenger Information',
@@ -874,7 +983,7 @@ const demoInspections = [
     module: 'SR',
     type: 'Train Inspection',
     location_type: 'On-Train',
-    train: '12189',
+    train: '18237',
     inspector: 'TI01',
     days_ago: 2,
     status: 'completed',
@@ -928,16 +1037,16 @@ const demoInspections = [
     module: 'PA',
     type: 'Station Inspection',
     location_type: 'Station',
-    station: 'KTE',
+    station: 'RIG',
     inspector: 'CMI02',
     days_ago: 19,
     status: 'completed',
-    title: 'Station inspection - Katni',
+    title: 'Station inspection - Raigarh',
     observations: [
       {
         unit: 'Platform No. 2',
         item: 'Lighting',
-        text: 'Six light fittings on the Varanasi end of Platform No. 2 are not working. The area remains dark during night train arrivals.',
+        text: 'Six light fittings on the Katni end of Platform No. 2 are not working. The area remains dark during night train arrivals.',
         deficiency: 'Lights not working at this location',
         dept: 'ELEC',
         severity: 'Major',
@@ -982,11 +1091,11 @@ const demoInspections = [
     module: 'CI',
     type: 'Commercial Inspection',
     location_type: 'Parcel Office',
-    station: 'STA',
+    station: 'CPH',
     inspector: 'CMI02',
     days_ago: 44,
     status: 'completed',
-    title: 'Parcel office inspection - Satna',
+    title: 'Parcel office inspection - Champa',
     observations: [
       {
         unit: 'Parcel Office',
@@ -1573,6 +1682,7 @@ async function main() {
   const ref = seedMasters();
   const { itemIds, groupIds } = seedCatalogue(ref);
   seedDeficiencies(ref, itemIds, groupIds);
+  seedAmenityNorms(ref, itemIds);
   const ids = seedPeople(ref);
 
   const existingObservations = get('SELECT COUNT(*) AS n FROM observations').n;

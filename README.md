@@ -1,7 +1,8 @@
 # Railway Inspection &amp; Compliance Management System
 
 An inspection and compliance platform for the Railway Commercial Department, covering three
-inspection streams through one common workflow:
+inspection streams through one common workflow. It is set up for the **Bilaspur division of South
+East Central Railway**, on the division's own station data:
 
 | Module | Scope |
 | --- | --- |
@@ -24,6 +25,31 @@ One inspection -> many observations -> automatic responsibility -> automatic not
 </p>
 
 ---
+
+## The division's own data
+
+The masters are not sample data. They are loaded from the division's records:
+
+| From | What it gives |
+| --- | --- |
+| PAMS extract, sheet `1_PAMS_DATA` | 89 stations with their code, name, section, category, state, district and chainage, and what each one has: booking windows, UTS counters, catering, retiring rooms, FOB, second entry, water supply, Divyangjan facilities, passengers a day |
+| PAMS extract, sheet `5_PLATFORMS` | Platform counts, which decide the areas the inspection screen offers |
+| Divisional dashboard, `Station_Info` | Category, platforms and the corrected coordinates |
+| Divisional dashboard, `MEA_Amenities` | **Minimum Essential Amenities: what is provided against what the norm requires**, for twelve amenity items at every station |
+
+That gives the division as it is: 89 stations on 8 sections, from Bilaspur (NSG-2, 8 platforms,
+51,067 passengers a day) to the halts on the Chirimiri and Ambikapur branches.
+
+Two things in the system are still placeholders, and are marked as such wherever they appear:
+
+* **Names.** Every user account and supervisor record is a **post**, not a person &mdash; "SSE/Works -
+  Champa", "Station Manager - Bilaspur". Putting invented names next to real station data would be
+  worse than useless, so the division fills the officer's name and mobile in from the Admin Panel.
+  The engineering posts and the stations each answers for come from PAMS, which names the Inspector
+  of Works' unit against every station.
+* **Trains.** PAMS carries stations, not trains, so the train master is four services the division
+  handles &mdash; enough to record and demonstrate a train inspection, and to be replaced by the
+  divisional list.
 
 ## Quick start
 
@@ -67,7 +93,7 @@ npm run build:demo        # rebuild it from the current seed
 ### Tests
 
 ```bash
-npm test                    # 79 unit and API tests: engines, workflow, RBAC, sync, reports, TDC,
+npm test                    # 81 unit and API tests: engines, workflow, RBAC, sync, reports, TDC,
                             # supervisor links, suggested deficiencies, notes, station import
 npm run smoke               # end-to-end walkthrough against a running server
 ```
@@ -175,7 +201,24 @@ Because the screen records *which* suggestion an observation came from, the dash
 observation at a time. All of it is master data: Admin &rarr; Suggested deficiency adds, rewords or
 retires a suggestion without a code change.
 
-### 5. The Inspection Note
+### 5. The norm, at the moment of recording
+
+The division's MEA return says what is provided at each station against what the norm requires. The
+New Inspection screen shows the line for the item being inspected, so the officer has it in front of
+them rather than looking it up afterwards:
+
+> **Minimum essential amenities** at Pendra Road
+> Water Coolers &mdash; **3** provided against **4** required (nos) &nbsp; `Short by 1`
+
+The station page carries the whole return, and what the station actually has &mdash; booking windows,
+catering, retiring rooms, foot over bridges, Divyangjan facilities, water supply, and the engineering
+unit that answers for it &mdash; with the date the divisional record was last updated.
+
+<p align="center">
+  <img src="docs/screenshots/station-facilities.png" alt="The divisional record for a station, with its MEA position" width="760">
+</p>
+
+### 6. The Inspection Note
 
 An inspection produces a list of observations, each already assigned with its own target date. What
 goes out of the office, though, is a letter. **Inspection Note** compiles them into one:
@@ -211,7 +254,7 @@ Sl.  Location / Unit   Item            Deficiency noticed     Action by   TDC
   not quietly rewritten. Reopening it shows where each item now stands against the letter as it went
   out.
 
-### 6. Time-bound compliance
+### 7. Time-bound compliance
 
 ```
 Submitted -> Assigned -> Acknowledged -> Action in progress
@@ -233,7 +276,7 @@ digital signature), **reject** (reopened, reason mandatory) or **physical verifi
 (stays open until seen on the ground). Every round of compliance is kept &mdash; nothing is
 overwritten.
 
-### 7. Dashboards and reports
+### 8. Dashboards and reports
 
 <p align="center">
   <img src="docs/screenshots/dashboard.png" alt="Divisional dashboard" width="760">
@@ -246,7 +289,7 @@ filters. Eight report types
 module-wise) export as **PDF, Excel or CSV**. Inspection PDFs carry the observations, photographs,
 signatures and a **QR code** that verifies the report against the live record without a login.
 
-### 8. Works offline
+### 9. Works offline
 
 The web client is an installable PWA. With no connectivity it keeps the master data it last saw,
 records inspections, observations and photographs in IndexedDB, shows **"Offline &ndash; saved
@@ -254,7 +297,7 @@ locally"**, and uploads everything automatically when the signal returns
 (**"Successfully synced"**). Every queued item carries a client UUID, so a retry can never create a
 duplicate. The pending queue is visible and under the inspector's control.
 
-### 9. Administration and audit
+### 10. Administration and audit
 
 <p align="center">
   <img src="docs/screenshots/admin-masters.png" alt="Admin panel" width="760">
@@ -374,14 +417,14 @@ enable them without one and messages are written to the server log and recorded 
 The seeded data reproduces the specification's end-to-end test, and the workflow test suite drives
 it on every run:
 
-> **Inspection Type** Passenger Amenities &middot; **Station** Jabalpur &middot; **Unit** Platform No. 2 &middot;
+> **Inspection Type** Passenger Amenities &middot; **Station** Bilaspur &middot; **Unit** Platform No. 2 &middot;
 > **Amenity** Drinking Water &middot; **Observation** "Water cooler is not functioning." &middot;
 > **Action By** Electrical &middot; **Supervisor** identified automatically &middot; **TDC** 30 September 2026 &middot;
 > **Photo** attached
 
-On submit the system generates the observation ID, saves it, identifies SSE/Electrical Rajesh
-Meshram from the Supervisor Master, sends the notification, shows it in his queue, starts TDC
-monitoring, accepts his compliance, notifies the inspecting officer, and closes the observation on
+On submit the system generates the observation ID, saves it, identifies the SSE/Electrical post for
+that section from the Supervisor Master, sends the notification, shows it in that queue, starts TDC
+monitoring, accepts the compliance, notifies the inspecting officer, and closes the observation on
 acceptance &mdash; updating every dashboard and report on the way.
 
 <p align="center">

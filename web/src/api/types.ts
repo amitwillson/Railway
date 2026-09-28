@@ -48,7 +48,49 @@ export interface Station {
   id: number; code: string; name: string;
   division_id: number; division_name?: string; division_code?: string;
   zone_name?: string; zone_code?: string;
-  category: string | null; station_type: string | null; section?: string | null; platforms: number;
+  category: string | null; station_type: string | null; platforms: number;
+  section?: string | null; section_name?: string | null;
+  state?: string | null; district?: string | null; route?: string | null; km?: number | null;
+  latitude?: number | null; longitude?: number | null;
+}
+
+export interface Section {
+  id: number; code: string; name: string;
+  division_code?: string | null; station_count?: number; sort_order: number;
+}
+
+/**
+ * What a station actually has, from the division's PAMS record. It is a periodic
+ * extract, not something this system maintains, so it carries the date it was
+ * last updated there.
+ */
+export interface StationFacilities {
+  station_id: number;
+  passengers_per_day: number; max_passengers_at_a_time: number;
+  trains_mail_express: number; trains_passenger: number;
+  booking_windows: number; uts_counters: number; prs_counter: number; enquiry_counters: number;
+  atm_count: number; food_plaza: number; refreshment_room: number; base_kitchen: number;
+  cloak_room: number; parcel_facility: number;
+  ac_retiring_rooms: number; non_ac_retiring_rooms: number;
+  waiting_hall_area_sqm: number; waiting_hall_seats: number;
+  foot_over_bridges: number; subways: number; second_entry: number;
+  pa_system: number; train_indication_board: number; station_clock: number;
+  rpf_post: number; grp_post: number;
+  water_source: string | null; water_supply_type: string | null;
+  wheelchair: number; divyangjan_toilet: number; divyangjan_ramp: number;
+  divyangjan_water_tap: number; escalator_or_lift: number; braille_signage: number;
+  aen_unit: string | null; iow_unit: string | null;
+  remarks: string | null; pams_updated_on: string | null; pams_updated_by: string | null;
+}
+
+/** Minimum Essential Amenities: provided against required, at one station. */
+export interface AmenityNorm {
+  id: number; station_id: number;
+  item_id: number | null; item_label: string; item_name?: string | null;
+  unit: 'nos' | 'sqm' | 'yes/no' | string;
+  provided: number; required: number;
+  shortfall: number; meets_norm: boolean;
+  source: string | null;
 }
 
 export interface Train {

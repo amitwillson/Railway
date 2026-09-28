@@ -72,16 +72,23 @@ router.get(
       q: optionalText,
       division_id: optionalId,
       zone_id: optionalId,
+      section: optionalText,
       limit: z.coerce.number().int().min(1).max(500).default(50),
     })
   ),
   (req, res) => {
-    const { q, division_id: divisionId, zone_id: zoneId, limit } = req.validQuery;
+    const { q, division_id: divisionId, zone_id: zoneId, section, limit } = req.validQuery;
     const where = ['s.active = 1'];
     const params = [];
     if (q) {
-      where.push('(lower(s.name) LIKE ? OR lower(s.code) LIKE ?)');
-      params.push(`%${q.toLowerCase()}%`, `%${q.toLowerCase()}%`);
+      // A section code typed into the search finds the stations on it, which is
+      // how an officer looks for "everything on JSG-BSP".
+      where.push(`(lower(s.name) LIKE ? OR lower(s.code) LIKE ? OR lower(COALESCE(s.section,'')) LIKE ?)`);
+      params.push(`%${q.toLowerCase()}%`, `%${q.toLowerCase()}%`, `%${q.toLowerCase()}%`);
+    }
+    if (section) {
+      where.push('s.section = ?');
+      params.push(section);
     }
     if (divisionId) {
       where.push('s.division_id = ?');
@@ -94,10 +101,12 @@ router.get(
     res.json({
       data: all(
         `SELECT s.*, d.name AS division_name, d.code AS division_code,
-                z.name AS zone_name, z.code AS zone_code
+                z.name AS zone_name, z.code AS zone_code,
+                sec.name AS section_name
            FROM stations s
            JOIN divisions d ON d.id = s.division_id
            JOIN zones z ON z.id = s.zone_id
+           LEFT JOIN sections sec ON sec.code = s.section
           WHERE ${where.join(' AND ')}
           ORDER BY CASE WHEN lower(s.code) = lower(?) THEN 0 ELSE 1 END, s.name
           LIMIT ?`,
@@ -120,15 +129,78 @@ router.get('/stations/:id', (req, res) => {
   if (!station) throw notFound('Station');
   res.json({
     ...station,
+    section_name: station.section
+      ? get('SELECT name FROM sections WHERE code = ?', [station.section])?.name ?? null
+      : null,
     units: unitsFor({ stationId: station.id, appliesTo: 'station' }),
+    // Every supervisor who answers for this station, whether posted here or
+    // covering it as part of a section.
     supervisors: all(
-      `SELECT sup.*, dep.name AS department_name FROM supervisors sup
+      `SELECT sup.*, dep.name AS department_name,
+              CASE WHEN sup.station_id = ? THEN 1 ELSE 0 END AS posted_here
+         FROM supervisors sup
          JOIN departments dep ON dep.id = sup.department_id
-        WHERE sup.active = 1 AND sup.station_id = ? ORDER BY dep.sort_order, sup.name`,
-      [station.id]
+        WHERE sup.active = 1
+          AND (sup.station_id = ?
+               OR EXISTS (SELECT 1 FROM supervisor_stations ss
+                           WHERE ss.supervisor_id = sup.id AND ss.active = 1
+                             AND ss.station_id = ?))
+        ORDER BY posted_here DESC, dep.sort_order, sup.name`,
+      [station.id, station.id, station.id]
     ),
+    facilities: get('SELECT * FROM station_facilities WHERE station_id = ?', [station.id]) ?? null,
+    amenity_norms: amenityNorms(station.id),
   });
 });
+
+/**
+ * Minimum Essential Amenities at one station: what is provided against what the
+ * norm requires, worst shortfall first.
+ */
+function amenityNorms(stationId, itemId = null) {
+  const params = [stationId];
+  let clause = '';
+  if (itemId) {
+    clause = ' AND n.item_id = ?';
+    params.push(itemId);
+  }
+  return all(
+    `SELECT n.*, i.name AS item_name
+       FROM station_amenity_norms n
+       LEFT JOIN inspection_items i ON i.id = n.item_id
+      WHERE n.station_id = ?${clause}
+      ORDER BY (n.required - n.provided) DESC, n.item_label`,
+    params
+  ).map((n) => ({
+    ...n,
+    shortfall: Math.max(0, Number(n.required) - Number(n.provided)),
+    meets_norm: Number(n.provided) >= Number(n.required),
+  }));
+}
+
+/** The norm for one item at one station, for the New Inspection screen. */
+router.get(
+  '/stations/:id/norms',
+  query(z.object({ item_id: optionalId })),
+  (req, res) => {
+    const station = get('SELECT id, name FROM stations WHERE id = ?', [req.params.id]);
+    if (!station) throw notFound('Station');
+    res.json({ station, data: amenityNorms(station.id, req.validQuery.item_id) });
+  }
+);
+
+router.get('/sections', (_req, res) =>
+  res.json({
+    data: all(
+      `SELECT sec.*, d.code AS division_code,
+              (SELECT COUNT(*) FROM stations st WHERE st.section = sec.code AND st.active = 1) AS station_count
+         FROM sections sec
+         LEFT JOIN divisions d ON d.id = sec.division_id
+        WHERE sec.active = 1
+        ORDER BY sec.sort_order, sec.name`
+    ),
+  })
+);
 
 /* --------------------------------- trains --------------------------------- */
 

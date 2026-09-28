@@ -393,7 +393,7 @@ describe('the station list', () => {
     const [header] = response.text.trim().split('\r\n');
     assert.equal(
       header.replace(/^\ufeff/, ''),
-      'code,name,division,zone,category,station_type,section,platforms,latitude,longitude,active'
+      'code,name,division,zone,category,station_type,section,platforms,state,district,route,km,latitude,longitude,active'
     );
     assert.ok(response.text.startsWith('\ufeff'), 'the byte order mark keeps Excel on UTF-8');
   });

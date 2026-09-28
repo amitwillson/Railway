@@ -7,7 +7,9 @@ import ObservationCard from '../components/ObservationCard';
 import { Badge, Card, EmptyState, Loading, StatTile, Tabs } from '../components/ui';
 import { BarChart } from '../components/charts/BarChart';
 import { formatDate, number, titleCase } from '../lib/format';
-import type { Inspection, Observation, Station } from '../api/types';
+import type {
+  AmenityNorm, Inspection, Observation, Station, StationFacilities,
+} from '../api/types';
 
 interface HistoryPayload {
   station: Station & { zone_name: string; platforms: number };
@@ -36,12 +38,23 @@ interface ComparePayload {
   still_open_from_previous: Observation[];
 }
 
-type Tab = 'summary' | 'observations' | 'inspections' | 'compare';
+/** The station as the divisional record has it, alongside its inspection history. */
+interface StationRecord extends Station {
+  facilities: StationFacilities | null;
+  amenity_norms: AmenityNorm[];
+}
+
+type Tab = 'summary' | 'facilities' | 'observations' | 'inspections' | 'compare';
+
+/** "Refreshment room · Cloak room" - the facilities present, in one line. */
+const facilityList = (f: StationFacilities, pairs: [keyof StationFacilities, string][]) =>
+  pairs.filter(([key]) => Number(f[key]) > 0).map(([, label]) => label).join(' · ');
 
 export default function StationDetail() {
   const { id } = useParams();
   const [data, setData] = useState<HistoryPayload | null>(null);
   const [compare, setCompare] = useState<ComparePayload | null>(null);
+  const [record, setRecord] = useState<StationRecord | null>(null);
   const [tab, setTab] = useState<Tab>('summary');
   const [days, setDays] = useState(365);
 
@@ -51,6 +64,11 @@ export default function StationDetail() {
       .then(setData)
       .catch(() => setData(null));
   }, [id, days]);
+
+  useEffect(() => {
+    if (!id) return;
+    api.get<StationRecord>(`/masters/stations/${id}`).then(setRecord).catch(() => setRecord(null));
+  }, [id]);
 
   useEffect(() => {
     if (!id || tab !== 'compare' || compare) return;
@@ -86,7 +104,22 @@ export default function StationDetail() {
           {s.category && <Badge tone="outline">{s.category}</Badge>}
           {s.station_type && <Badge tone="outline">{s.station_type}</Badge>}
           {!!s.platforms && <Badge tone="outline">{s.platforms} platforms</Badge>}
+          {record?.section && (
+            <Badge tone="outline">{record.section_name ?? record.section}</Badge>
+          )}
         </div>
+        {record && (record.state || record.km) && (
+          <div className="xsmall muted" style={{ marginTop: 4 }}>
+            {[
+              record.district && titleCase(record.district.toLowerCase()),
+              record.state && titleCase(record.state.toLowerCase()),
+              record.km != null && `km ${record.km}`,
+              record.route && `route ${record.route}`,
+            ]
+              .filter(Boolean)
+              .join(' · ')}
+          </div>
+        )}
         <div className="row row--wrap" style={{ gap: 8, marginTop: 12 }}>
           <Link to={`/inspections/new`} className="btn btn--sm"><Icon name="plus" size={14} /> Inspect this station</Link>
           <Link to={`/observations?station_id=${s.id}&open=1`} className="btn btn--ghost btn--sm">Pending observations</Link>
@@ -114,6 +147,7 @@ export default function StationDetail() {
       <Tabs
         tabs={[
           { key: 'summary', label: 'Summary' },
+          { key: 'facilities', label: 'Facilities & norms' },
           { key: 'observations', label: 'Observations', count: data.observations.length },
           { key: 'inspections', label: 'Inspections', count: data.inspections.length },
           { key: 'compare', label: 'Compare inspections' },
@@ -161,6 +195,146 @@ export default function StationDetail() {
               </div>
             )}
           </Card>
+        </div>
+      )}
+
+      {tab === 'facilities' && (
+        <div className="stack" style={{ '--gap': '12px' } as React.CSSProperties}>
+          {!record?.facilities ? (
+            <Card>
+              <EmptyState
+                icon="station"
+                title="No facility record for this station"
+                text="Facilities come from the divisional PAMS extract. Load it and this page fills in."
+              />
+            </Card>
+          ) : (
+            <Card
+              title="What the station has"
+              subtitle={
+                record.facilities.pams_updated_on
+                  ? `Divisional record, last updated in PAMS on ${record.facilities.pams_updated_on}`
+                  : 'Divisional record'
+              }
+              icon="station"
+            >
+              <dl className="kv">
+                <dt>Passengers</dt>
+                <dd>
+                  <b className="mono-num">{number(record.facilities.passengers_per_day)}</b> a day ·{' '}
+                  <b className="mono-num">{number(record.facilities.max_passengers_at_a_time)}</b> at any one time
+                </dd>
+                <dt>Trains halting</dt>
+                <dd>
+                  <b className="mono-num">{record.facilities.trains_mail_express}</b> mail/express ·{' '}
+                  <b className="mono-num">{record.facilities.trains_passenger}</b> passenger
+                </dd>
+                <dt>Ticketing</dt>
+                <dd>
+                  <b className="mono-num">{record.facilities.booking_windows}</b> booking windows ·{' '}
+                  <b className="mono-num">{record.facilities.uts_counters}</b> UTS ·{' '}
+                  {record.facilities.prs_counter ? 'PRS counter' : 'no PRS counter'} ·{' '}
+                  <b className="mono-num">{record.facilities.enquiry_counters}</b> enquiry
+                </dd>
+                <dt>Catering &amp; commercial</dt>
+                <dd>{facilityList(record.facilities, [
+                  ['refreshment_room', 'Refreshment room'], ['food_plaza', 'Food plaza'],
+                  ['base_kitchen', 'Base kitchen'], ['cloak_room', 'Cloak room'],
+                  ['parcel_facility', 'Parcel / luggage'],
+                ]) || 'None recorded'}</dd>
+                <dt>Waiting &amp; retiring</dt>
+                <dd>
+                  Waiting hall <b className="mono-num">{record.facilities.waiting_hall_area_sqm}</b> sqm with{' '}
+                  <b className="mono-num">{record.facilities.waiting_hall_seats}</b> seats
+                  {(record.facilities.ac_retiring_rooms + record.facilities.non_ac_retiring_rooms) > 0 && (
+                    <>
+                      {' · '}
+                      <b className="mono-num">{record.facilities.ac_retiring_rooms}</b> AC and{' '}
+                      <b className="mono-num">{record.facilities.non_ac_retiring_rooms}</b> non-AC retiring rooms
+                    </>
+                  )}
+                </dd>
+                <dt>Circulation</dt>
+                <dd>
+                  <b className="mono-num">{record.facilities.foot_over_bridges}</b> foot over bridges ·{' '}
+                  <b className="mono-num">{record.facilities.subways}</b> subways ·{' '}
+                  {record.facilities.second_entry ? 'second entry' : 'no second entry'}
+                </dd>
+                <dt>Passenger information</dt>
+                <dd>{facilityList(record.facilities, [
+                  ['pa_system', 'Public address'], ['train_indication_board', 'Train indication board'],
+                  ['station_clock', 'Station clock'],
+                ]) || 'None recorded'}</dd>
+                <dt>Divyangjan</dt>
+                <dd>{facilityList(record.facilities, [
+                  ['wheelchair', 'Wheelchair'], ['divyangjan_toilet', 'Toilet'], ['divyangjan_ramp', 'Ramp'],
+                  ['divyangjan_water_tap', 'Water tap'], ['escalator_or_lift', 'Escalator / lift'],
+                  ['braille_signage', 'Braille signage'],
+                ]) || 'None recorded'}</dd>
+                <dt>Security</dt>
+                <dd>{facilityList(record.facilities, [['rpf_post', 'RPF post'], ['grp_post', 'GRP post']]) || 'No post'}</dd>
+                {record.facilities.water_source && (
+                  <>
+                    <dt>Water supply</dt>
+                    <dd>{[record.facilities.water_source, record.facilities.water_supply_type].filter(Boolean).join(' · ')}</dd>
+                  </>
+                )}
+                {(record.facilities.aen_unit || record.facilities.iow_unit) && (
+                  <>
+                    <dt>Engineering unit</dt>
+                    <dd>
+                      {record.facilities.aen_unit && <>AEN {record.facilities.aen_unit}</>}
+                      {record.facilities.aen_unit && record.facilities.iow_unit && ' · '}
+                      {record.facilities.iow_unit && <>IOW {record.facilities.iow_unit}</>}
+                    </dd>
+                  </>
+                )}
+                {record.facilities.remarks && (<><dt>Remarks</dt><dd>{record.facilities.remarks}</dd></>)}
+              </dl>
+            </Card>
+          )}
+
+          {(record?.amenity_norms.length ?? 0) > 0 && (
+            <Card
+              title="Minimum essential amenities"
+              subtitle={`${record!.amenity_norms.filter((n) => !n.meets_norm).length} of ${record!.amenity_norms.length} below the norm`}
+              icon="clipboard"
+              pad={false}
+            >
+              <div className="table-wrap">
+                <table className="data">
+                  <thead>
+                    <tr>
+                      <th>Amenity</th><th className="num">Provided</th><th className="num">Required</th>
+                      <th>Unit</th><th>Position</th><th />
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {record!.amenity_norms.map((n) => (
+                      <tr key={n.id}>
+                        <td className="strong">{n.item_label}</td>
+                        <td className="num">{n.unit === 'yes/no' ? (n.provided ? 'Yes' : 'No') : n.provided}</td>
+                        <td className="num">{n.unit === 'yes/no' ? (n.required ? 'Yes' : 'No') : n.required}</td>
+                        <td className="xsmall muted">{n.unit}</td>
+                        <td>
+                          {n.meets_norm
+                            ? <Badge tone="good">Meets the norm</Badge>
+                            : <Badge tone="critical">Short by {n.unit === 'yes/no' ? 'provision' : n.shortfall}</Badge>}
+                        </td>
+                        <td>
+                          {n.item_id && (
+                            <Link className="xsmall" to={`/observations?station_id=${s.id}&item_id=${n.item_id}`}>
+                              Observations
+                            </Link>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </Card>
+          )}
         </div>
       )}
 

@@ -11,7 +11,7 @@ import {
 import { dictate, speechSupported, type Dictation } from '../lib/speech';
 import { addDays, formatDate, todayIso } from '../lib/format';
 import type {
-  Deficiency, DeficiencyList, Department, Inspection, InspectionItem, Observation,
+  AmenityNorm, Deficiency, DeficiencyList, Department, Inspection, InspectionItem, Observation,
   RepeatResult, Station, Supervisor, Train, Unit,
 } from '../api/types';
 
@@ -59,6 +59,7 @@ export default function NewInspection() {
   const [checked, setChecked] = useState<string[]>([]);
   const [text, setText] = useState('');
   const [deficiencies, setDeficiencies] = useState<DeficiencyList | null>(null);
+  const [norms, setNorms] = useState<AmenityNorm[]>([]);
   const [deficiencyId, setDeficiencyId] = useState<number | null>(null);
   /** The wording the last picked suggestion put in the box, so an edit is never lost. */
   const suggested = useRef('');
@@ -164,6 +165,19 @@ export default function NewInspection() {
       .then(setItems)
       .catch(() => setItems(null));
   }, [moduleCode, isTrain]);
+
+  // The Minimum Essential Amenities norm for this item at this station: what is
+  // provided against what is required. Shown while the observation is written, so
+  // the officer has the norm in front of them rather than looking it up after.
+  useEffect(() => {
+    if (!itemId || !station) {
+      setNorms([]);
+      return;
+    }
+    api.get<{ data: AmenityNorm[] }>(`/masters/stations/${station.id}/norms`, { item_id: itemId })
+      .then((r) => setNorms(r.data))
+      .catch(() => setNorms([]));
+  }, [itemId, station]);
 
   // The suggested-deficiency list follows the item: what usually fails here, and
   // the wordings already used for it at this station.
@@ -742,6 +756,39 @@ export default function NewInspection() {
               <Link key={m.id} to={`/observations/${m.id}`} className="xsmall" style={{ color: 'inherit' }}>
                 {m.ref_no} · {formatDate(m.observed_at)} · {m.match_reason} · {m.status}
               </Link>
+            ))}
+          </div>
+        </Banner>
+      )}
+
+      {norms.length > 0 && (
+        <Banner tone={norms.some((n) => !n.meets_norm) ? 'warn' : 'info'} icon="clipboard">
+          <div className="small">
+            <strong>Minimum essential amenities</strong> at {station?.name}
+          </div>
+          <div className="stack" style={{ '--gap': '3px', marginTop: 5 } as React.CSSProperties}>
+            {norms.map((n) => (
+              <div key={n.id} className="row row--wrap xsmall" style={{ gap: 8 }}>
+                <span style={{ minWidth: 150 }}>{n.item_label}</span>
+                {n.unit === 'yes/no' ? (
+                  <span>
+                    {n.provided ? 'provided' : 'not provided'}
+                    {n.required ? ' · required' : ' · not required'}
+                  </span>
+                ) : (
+                  <span>
+                    <b className="mono-num">{n.provided}</b> provided against{' '}
+                    <b className="mono-num">{n.required}</b> required ({n.unit})
+                  </span>
+                )}
+                {n.meets_norm ? (
+                  <Badge tone="good">Meets the norm</Badge>
+                ) : (
+                  <Badge tone="critical">
+                    Short by {n.unit === 'yes/no' ? 'provision' : n.shortfall}
+                  </Badge>
+                )}
+              </div>
             ))}
           </div>
         </Banner>

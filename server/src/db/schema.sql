@@ -37,6 +37,20 @@ CREATE TABLE IF NOT EXISTS divisions (
 );
 CREATE INDEX IF NOT EXISTS idx_divisions_zone ON divisions(zone_id);
 
+-- Sections of the division. `stations.section` carries the code rather than a
+-- foreign key, because the station list is replaced wholesale from a CSV that
+-- names the section in text; this table gives the code its full name and orders
+-- the sections for the filters.
+CREATE TABLE IF NOT EXISTS sections (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  code        TEXT NOT NULL UNIQUE,
+  name        TEXT NOT NULL,
+  division_id INTEGER REFERENCES divisions(id),
+  sort_order  INTEGER NOT NULL DEFAULT 100,
+  active      INTEGER NOT NULL DEFAULT 1,
+  created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+
 CREATE TABLE IF NOT EXISTS departments (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
   code        TEXT NOT NULL UNIQUE,
@@ -55,8 +69,12 @@ CREATE TABLE IF NOT EXISTS stations (
   zone_id      INTEGER NOT NULL REFERENCES zones(id),
   category     TEXT,                 -- NSG-1 .. NSG-6, SG-1 .., HG-1 ..
   station_type TEXT,                 -- Junction / Terminal / Halt / Flag ...
-  section      TEXT,                 -- the section the station sits on
+  section      TEXT,                 -- section code, e.g. JSG-BSP (see sections)
   platforms    INTEGER NOT NULL DEFAULT 0,
+  state        TEXT,
+  district     TEXT,
+  route        TEXT,                 -- route classification (A, B, D spl, ...)
+  km           REAL,                 -- chainage, which orders a section
   latitude     REAL,
   longitude    REAL,
   active       INTEGER NOT NULL DEFAULT 1,
@@ -65,6 +83,74 @@ CREATE TABLE IF NOT EXISTS stations (
 );
 CREATE INDEX IF NOT EXISTS idx_stations_division ON stations(division_id);
 CREATE INDEX IF NOT EXISTS idx_stations_name ON stations(name);
+
+-- What a station actually has, as recorded in PAMS. One row per station, kept
+-- apart from `stations` because it is a periodic extract from the divisional
+-- record rather than something this system maintains: it tells an inspecting
+-- officer what should be there before they go, and the station page shows it as
+-- the position of record with the date it was last updated in PAMS.
+CREATE TABLE IF NOT EXISTS station_facilities (
+  station_id               INTEGER PRIMARY KEY REFERENCES stations(id) ON DELETE CASCADE,
+  passengers_per_day       INTEGER NOT NULL DEFAULT 0,
+  max_passengers_at_a_time INTEGER NOT NULL DEFAULT 0,
+  trains_mail_express      INTEGER NOT NULL DEFAULT 0,
+  trains_passenger         INTEGER NOT NULL DEFAULT 0,
+  booking_windows          INTEGER NOT NULL DEFAULT 0,
+  uts_counters             INTEGER NOT NULL DEFAULT 0,
+  prs_counter              INTEGER NOT NULL DEFAULT 0,
+  enquiry_counters         INTEGER NOT NULL DEFAULT 0,
+  atm_count                INTEGER NOT NULL DEFAULT 0,
+  food_plaza               INTEGER NOT NULL DEFAULT 0,
+  refreshment_room         INTEGER NOT NULL DEFAULT 0,
+  base_kitchen             INTEGER NOT NULL DEFAULT 0,
+  cloak_room               INTEGER NOT NULL DEFAULT 0,
+  parcel_facility          INTEGER NOT NULL DEFAULT 0,
+  ac_retiring_rooms        INTEGER NOT NULL DEFAULT 0,
+  non_ac_retiring_rooms    INTEGER NOT NULL DEFAULT 0,
+  waiting_hall_area_sqm    REAL NOT NULL DEFAULT 0,
+  waiting_hall_seats       INTEGER NOT NULL DEFAULT 0,
+  foot_over_bridges        INTEGER NOT NULL DEFAULT 0,
+  subways                  INTEGER NOT NULL DEFAULT 0,
+  second_entry             INTEGER NOT NULL DEFAULT 0,
+  pa_system                INTEGER NOT NULL DEFAULT 0,
+  train_indication_board   INTEGER NOT NULL DEFAULT 0,
+  station_clock            INTEGER NOT NULL DEFAULT 0,
+  rpf_post                 INTEGER NOT NULL DEFAULT 0,
+  grp_post                 INTEGER NOT NULL DEFAULT 0,
+  water_source             TEXT,
+  water_supply_type        TEXT,
+  wheelchair               INTEGER NOT NULL DEFAULT 0,
+  divyangjan_toilet        INTEGER NOT NULL DEFAULT 0,
+  divyangjan_ramp          INTEGER NOT NULL DEFAULT 0,
+  divyangjan_water_tap     INTEGER NOT NULL DEFAULT 0,
+  escalator_or_lift        INTEGER NOT NULL DEFAULT 0,
+  braille_signage          INTEGER NOT NULL DEFAULT 0,
+  aen_unit                 TEXT,     -- Assistant Engineer's unit, from PAMS
+  iow_unit                 TEXT,     -- Inspector of Works' unit, from PAMS
+  remarks                  TEXT,
+  pams_updated_on          TEXT,
+  pams_updated_by          TEXT,
+  updated_at               TEXT
+);
+
+-- Minimum Essential Amenities: what is provided against what the norm requires.
+-- The New Inspection screen shows the line for the item being inspected, so the
+-- officer sees the norm at the moment of recording. `item_id` is resolved where
+-- the norm item matches an inspection item by name; the label is kept either way.
+CREATE TABLE IF NOT EXISTS station_amenity_norms (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  station_id INTEGER NOT NULL REFERENCES stations(id) ON DELETE CASCADE,
+  item_id    INTEGER REFERENCES inspection_items(id) ON DELETE SET NULL,
+  item_label TEXT NOT NULL,
+  unit       TEXT NOT NULL DEFAULT 'nos',   -- nos | sqm | yes/no
+  provided   REAL NOT NULL DEFAULT 0,
+  required   REAL NOT NULL DEFAULT 0,
+  source     TEXT,                          -- where the figures came from
+  updated_at TEXT,
+  UNIQUE (station_id, item_label)
+);
+CREATE INDEX IF NOT EXISTS idx_norms_station ON station_amenity_norms(station_id);
+CREATE INDEX IF NOT EXISTS idx_norms_item ON station_amenity_norms(item_id);
 
 CREATE TABLE IF NOT EXISTS trains (
   id           INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -731,6 +817,7 @@ SELECT
   s.name       AS station_name,
   s.code       AS station_code,
   s.division_id AS division_id,
+  s.section    AS station_section,
   d.name       AS division_name,
   z.code       AS zone_code,
   t.number     AS train_number,

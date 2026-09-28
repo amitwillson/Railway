@@ -1,7 +1,8 @@
 # Replacing the station list
 
-The station master shipped with the system is indicative. The authoritative list comes from the
-division, and goes in without a code change.
+The station master is loaded from the Bilaspur division's own records - the PAMS extract and the
+divisional dashboard - so it is already the real list. This note is how to refresh it, or how another
+division puts its own list in. Either way it needs no code change.
 
 ## The file
 
@@ -17,7 +18,10 @@ list**) and have them correct it. Either way the file comes back as CSV.
 | `Zone` | no | Zonal code (`WCR`, …). Left blank, it is taken from the division |
 | `Category` | no | `NSG-1` &hellip; `NSG-6`, `SG-…`, `HG-…` |
 | `Station Type` | no | Junction, Station, Halt, Terminal, Flag &hellip; |
-| `Section` | no | The section the station sits on, e.g. `Katni - Itarsi`. Used to group the station list and to describe a supervisor's section |
+| `Section` | no | The section code the station sits on, e.g. `JSG-BSP`. Groups the station list, filters the dashboards, and describes a supervisor's section. The full name of each code is in Admin -> Section |
+| `State`, `District` | no | As PAMS carries them |
+| `Route` | no | Route classification (A, B, D spl, ...) |
+| `Km` | no | Chainage, which orders the stations along a section |
 | `No. of Platforms` | no | Also controls which platforms the Unit list offers, so a two-platform halt stops showing Platform No. 6 |
 | `Latitude`, `Longitude` | no | |
 | `Active` | no | `0` takes the station out of the lists without deleting it |
@@ -26,7 +30,8 @@ Column headings do not have to match exactly. Headings are read case-insensitive
 stops become underscores, and the usual office variants are understood &mdash; `Station Code`,
 `STN CODE` and `code` all mean the same column, as do `No. of Platforms`, `Number of Platforms`,
 `PF` and `platforms`. Anything the system does not recognise is ignored rather than rejected, and
-the error message lists the headings it actually found.
+the error message lists the headings it actually found. A PAMS export can therefore go in as it
+comes out.
 
 ## Loading it
 
@@ -55,5 +60,20 @@ Two things to check once the real list is in:
   system finds them. A section inspector should carry every station on their section, not only the
   one they are posted at.
 * **Station areas** (Admin &rarr; Master data &rarr; Unit / Area) &mdash; platforms, booking hall,
-  waiting rooms and so on are shared across all stations by default. Anything specific to one
-  station is added there with that station selected.
+  waiting rooms and so on are shared across all stations by default, and the platform areas offered
+  follow each station's platform count. Anything specific to one station is added there with that
+  station selected.
+
+## The rest of the divisional record
+
+Two masters go alongside the station list and are loaded the same way, from the division's own
+returns:
+
+* **Station facilities** &mdash; what each station has, from PAMS. Shown on the station page under
+  *Facilities &amp; norms*, with the date PAMS was last updated.
+* **Minimum essential amenities** (Admin &rarr; Amenity norm) &mdash; provided against required, per
+  station per item, from the divisional MEA return. The New Inspection screen shows the line for the
+  item being inspected.
+
+Both are refreshed by re-running the extract against a newer workbook; neither is maintained by
+inspectors, because they are the divisional position of record rather than an inspection finding.

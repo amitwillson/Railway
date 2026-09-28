@@ -26,7 +26,8 @@ const db = new Database(DB_FILE, { readonly: true });
 const all = (sql) => db.prepare(sql).all();
 
 const TABLES = [
-  'zones', 'divisions', 'departments', 'stations', 'trains', 'units',
+  'zones', 'divisions', 'sections', 'departments', 'stations', 'station_facilities',
+  'station_amenity_norms', 'trains', 'units',
   'modules', 'inspection_types', 'item_groups', 'inspection_items',
   'item_parameters', 'item_parameter_map', 'observation_categories', 'severities',
   'rule_references', 'contractors', 'tdc_rules', 'notification_rules',

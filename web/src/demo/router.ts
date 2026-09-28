@@ -380,16 +380,20 @@ const stationView = (s: Row): Row => ({
   division_code: byId('divisions', s.division_id)?.code,
   zone_name: byId('zones', s.zone_id)?.name,
   zone_code: byId('zones', s.zone_id)?.code,
+  section_name: table('sections').find((sec) => sec.code === s.section)?.name ?? null,
 });
 
 on('GET', '/masters/stations', ({ q }) => {
   const term = q.get('q')?.toLowerCase();
   const divisionId = num(q.get('division_id'));
+  const section = q.get('section') || undefined;
   const limit = num(q.get('limit')) ?? 50;
   const rows = where('stations', (s) => {
     if (!s.active) return false;
     if (divisionId !== undefined && s.division_id !== divisionId) return false;
-    if (term && !(contains(s.name, term) || contains(s.code, term))) return false;
+    if (section && s.section !== section) return false;
+    // A section code typed into the search finds the stations on it.
+    if (term && !(contains(s.name, term) || contains(s.code, term) || contains(s.section, term))) return false;
     return true;
   })
     .sort((a, b) => {
@@ -403,6 +407,37 @@ on('GET', '/masters/stations', ({ q }) => {
   return { data: rows.map(stationView) };
 });
 
+/** Minimum Essential Amenities at one station, worst shortfall first. */
+const amenityNorms = (stationId: number, itemId?: number) =>
+  where('station_amenity_norms', (n) => n.station_id === stationId && (!itemId || n.item_id === itemId))
+    .map((n): Row => ({
+      ...n,
+      item_name: byId('inspection_items', n.item_id)?.name ?? null,
+      shortfall: Math.max(0, Number(n.required) - Number(n.provided)),
+      meets_norm: Number(n.provided) >= Number(n.required),
+    }))
+    .sort((a, b) => Number(b.required) - Number(b.provided) - (Number(a.required) - Number(a.provided))
+      || String(a.item_label).localeCompare(String(b.item_label)));
+
+on('GET', '/masters/stations/:id/norms', ({ params, q }) => {
+  const station = byId('stations', params[0]);
+  if (!station) throw notFound('Station');
+  return {
+    station: { id: station.id, name: station.name },
+    data: amenityNorms(station.id, num(q.get('item_id'))),
+  };
+});
+
+on('GET', '/masters/sections', () => ({
+  data: where('sections', (sec) => sec.active !== 0)
+    .map((sec): Row => ({
+      ...sec,
+      division_code: byId('divisions', sec.division_id)?.code ?? null,
+      station_count: where('stations', (st) => st.section === sec.code && st.active).length,
+    }))
+    .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0)),
+}));
+
 const unitsFor = (stationId: number | undefined, appliesTo: 'station' | 'train') =>
   where('units', (u) =>
     u.active &&
@@ -415,13 +450,23 @@ const unitsFor = (stationId: number | undefined, appliesTo: 'station' | 'train')
 on('GET', '/masters/stations/:id', ({ params }) => {
   const station = byId('stations', params[0]);
   if (!station) throw notFound('Station');
+  // Everyone who answers for this station, whether posted here or covering it.
+  const links = where('supervisor_stations', (l) => l.active && l.station_id === station.id);
   return {
     ...stationView(station),
     units: unitsFor(station.id, 'station'),
-    supervisors: where('supervisors', (s) => s.active && s.station_id === station.id).map((s) => ({
-      ...s,
-      department_name: byId('departments', s.department_id)?.name,
-    })),
+    supervisors: where(
+      'supervisors',
+      (s) => s.active && (s.station_id === station.id || links.some((l) => l.supervisor_id === s.id))
+    )
+      .map((s): Row => ({
+        ...s,
+        department_name: byId('departments', s.department_id)?.name,
+        posted_here: s.station_id === station.id ? 1 : 0,
+      }))
+      .sort((a, b) => b.posted_here - a.posted_here || String(a.name).localeCompare(String(b.name))),
+    facilities: table('station_facilities').find((f) => f.station_id === station.id) ?? null,
+    amenity_norms: amenityNorms(station.id),
   };
 });
 
@@ -1662,6 +1707,7 @@ on('GET', '/dashboard/stations', ({ q, user }) => {
       station_id: Number(stationId),
       station_name: group[0]!.station_name,
       station_code: group[0]!.station_code,
+      section: group[0]!.station_section,
       division_name: group[0]!.division_name,
       observations: group.length,
       pending: group.filter((o) => o.is_open).length,
@@ -2593,7 +2639,9 @@ const RESOURCES: Record<string, { table: string; label: string; columns: string[
   zones: { table: 'zones', label: 'Zone', columns: ['code', 'name', 'active'] },
   divisions: { table: 'divisions', label: 'Division', columns: ['code', 'name', 'zone_id', 'active'] },
   departments: { table: 'departments', label: 'Department', columns: ['code', 'name', 'is_external', 'sort_order', 'active'] },
-  stations: { table: 'stations', label: 'Station', columns: ['code', 'name', 'division_id', 'zone_id', 'category', 'station_type', 'section', 'platforms', 'latitude', 'longitude', 'active'], search: ['code', 'name'] },
+  sections: { table: 'sections', label: 'Section', columns: ['code', 'name', 'division_id', 'sort_order', 'active'], search: ['code', 'name'] },
+  stations: { table: 'stations', label: 'Station', columns: ['code', 'name', 'division_id', 'zone_id', 'category', 'station_type', 'section', 'platforms', 'state', 'district', 'route', 'km', 'latitude', 'longitude', 'active'], search: ['code', 'name', 'section'] },
+  station_amenity_norms: { table: 'station_amenity_norms', label: 'Amenity norm (MEA)', columns: ['station_id', 'item_id', 'item_label', 'unit', 'provided', 'required', 'source'], search: ['item_label'] },
   trains: { table: 'trains', label: 'Train', columns: ['number', 'name', 'origin_code', 'origin', 'destination_code', 'destination', 'train_type', 'has_pantry', 'active'], search: ['number', 'name'] },
   units: { table: 'units', label: 'Unit / Area', columns: ['name', 'applies_to', 'station_id', 'kind', 'sort_order', 'active'], search: ['name'] },
   modules: { table: 'modules', label: 'Module', columns: ['code', 'name', 'tagline', 'description', 'accent', 'sort_order', 'active'] },

@@ -22,7 +22,8 @@ const source = fixture as unknown as Fixture;
 const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
 
 const TABLES = [
-  'zones', 'divisions', 'departments', 'stations', 'trains', 'units',
+  'zones', 'divisions', 'sections', 'departments', 'stations', 'station_facilities',
+  'station_amenity_norms', 'trains', 'units',
   'modules', 'inspection_types', 'item_groups', 'inspection_items',
   'item_parameters', 'observation_categories', 'severities', 'rule_references',
   'contractors', 'tdc_rules', 'notification_rules', 'escalation_levels',
@@ -144,6 +145,7 @@ export function viewObservation(o: Row): Row {
     module_accent: module?.accent ?? null,
     station_name: station?.name ?? null,
     station_code: station?.code ?? null,
+    station_section: station?.section ?? null,
     division_id: station?.division_id ?? null,
     division_name: division?.name ?? null,
     zone_code: zone?.code ?? null,

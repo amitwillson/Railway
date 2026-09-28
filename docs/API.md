@@ -56,8 +56,10 @@ see everything.
 | Method | Path | Notes |
 | --- | --- | --- |
 | GET | `/masters/bootstrap` | Everything the inspection screen needs, in one call |
-| GET | `/masters/stations` | `q`, `division_id`, `zone_id`, `limit` |
-| GET | `/masters/stations/:id` | With its units and posted supervisors |
+| GET | `/masters/stations` | `q` (name, code or section), `division_id`, `zone_id`, `section`, `limit` |
+| GET | `/masters/stations/:id` | With its units, everyone who answers for it, the PAMS facility record and the MEA position |
+| GET | `/masters/stations/:id/norms` | `item_id` &rarr; what is provided against what the norm requires, worst shortfall first |
+| GET | `/masters/sections` | The sections of the division, with the station count of each |
 | GET | `/masters/trains`, `/masters/trains/:id` | `q` |
 | GET | `/masters/units` | `station_id`, `location_type`, `applies_to` |
 | GET | `/masters/items` | `module_code`, `applies_to`, `group_id`, `q`; returns flat and grouped |

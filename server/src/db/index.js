@@ -31,6 +31,10 @@ export function getDb() {
 const ADDED_COLUMNS = [
   { table: 'observations', column: 'deficiency_id', definition: 'INTEGER REFERENCES item_deficiencies(id)' },
   { table: 'stations', column: 'section', definition: 'TEXT' },
+  { table: 'stations', column: 'state', definition: 'TEXT' },
+  { table: 'stations', column: 'district', definition: 'TEXT' },
+  { table: 'stations', column: 'route', definition: 'TEXT' },
+  { table: 'stations', column: 'km', definition: 'REAL' },
 ];
 
 /** Applies schema.sql. It is written to be idempotent (CREATE ... IF NOT EXISTS). */

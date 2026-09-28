@@ -8,8 +8,11 @@ ISO-8601 UTC strings; plain dates are `YYYY-MM-DD`. Foreign keys are enforced.
 | Table | Purpose |
 | --- | --- |
 | `zones`, `divisions` | Railway organisation |
+| `sections` | The sections of the division. `stations.section` carries the code rather than a foreign key, because the station list is replaced wholesale from a CSV that names the section in text |
 | `departments` | The "Action By" list, including external parties (contractor, licensee, vendor) |
-| `stations` | Code, name, division, zone, category, type, **section**, platforms, coordinates. Replaceable in one step from CSV (Admin &rarr; Stations &rarr; Import) |
+| `stations` | Code, name, division, zone, category, type, section, platforms, state, district, route, chainage and coordinates. Replaceable in one step from CSV (Admin &rarr; Stations &rarr; Import) |
+| `station_facilities` | What a station has, from the division's PAMS record: counters, catering, retiring rooms, FOB and second entry, passenger information, Divyangjan facilities, water supply, and the AEN and IOW units that answer for it. One row per station, carrying the date PAMS was last updated &mdash; it is a periodic extract, not something this system maintains |
+| `station_amenity_norms` | **Minimum Essential Amenities**: provided against required, per station per norm item, linked to the inspection item where the names match. What the New Inspection screen shows at the moment of recording |
 | `trains` | Number, name, origin, destination, type, pantry |
 | `units` | Units and areas. `station_id IS NULL` makes the unit a template available at every station; `applies_to` separates station areas from train areas |
 

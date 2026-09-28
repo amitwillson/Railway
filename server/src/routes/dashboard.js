@@ -178,6 +178,7 @@ router.get('/stations', query(filterSchema.extend({ limit: z.coerce.number().int
   res.json({
     data: all(
       `SELECT o.station_id, o.station_name, o.station_code, o.division_name,
+              o.station_section AS section,
               COUNT(*) AS observations,
               SUM(CASE WHEN o.status NOT IN ('closed','cancelled') THEN 1 ELSE 0 END) AS pending,
               SUM(CASE WHEN o.is_overdue = 1 THEN 1 ELSE 0 END) AS overdue,
