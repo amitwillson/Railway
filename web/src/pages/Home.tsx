@@ -11,6 +11,14 @@ import type { Module, ObservationStatus } from '../api/types';
 interface HomePayload {
   modules: (Module & { total: number; open: number; overdue: number; closed: number; critical_open: number })[];
   tiles: Record<string, number>;
+  /** An inspection still in progress is resumable work, so it leads the screen. */
+  active_inspection: {
+    id: number; ref_no: string; title: string | null;
+    station_name: string | null; station_code: string | null; train_number: string | null;
+    module_code: string; inspection_type_name: string; started_at: string | null;
+    areas_on_sheet: number; areas_covered: number; areas_not_available: number;
+    coverage_pct: number | null; items_checked: number; observation_count: number;
+  } | null;
   recent_observations: {
     id: number; ref_no: string; observation: string; status: ObservationStatus;
     severity_name: string; module_code: string; station_name: string | null;
@@ -103,14 +111,40 @@ export default function Home() {
         {loading && !data && <Skeletons rows={3} height={168} />}
       </div>
 
+      {/* An inspection left in progress is the first thing to deal with: it is
+          half a record until it is finished. */}
+      {data?.active_inspection && (
+        <Link to={`/inspections/${data.active_inspection.id}`} className="tile tile--accent" style={{ display: 'block' }}>
+          <div className="tile__label"><Icon name="clipboard" size={13} /> Inspection in progress</div>
+          <div className="tile__value" style={{ fontSize: '1.05rem' }}>
+            {data.active_inspection.station_name
+              ?? data.active_inspection.train_number
+              ?? data.active_inspection.ref_no}
+          </div>
+          <div className="tile__foot">
+            {data.active_inspection.areas_covered} of{' '}
+            {data.active_inspection.areas_on_sheet - data.active_inspection.areas_not_available} areas attended to
+            {data.active_inspection.coverage_pct != null && ` (${data.active_inspection.coverage_pct}%)`}
+            {' · '}{data.active_inspection.items_checked} items checked
+            {' · '}{data.active_inspection.observation_count} deficiencies
+          </div>
+        </Link>
+      )}
+
       {/* Primary actions */}
       <div className="grid grid--tiles">
         <Link to="/inspections/new" className="tile tile--accent">
           <div className="tile__label"><Icon name="plus" size={13} /> Start</div>
           <div className="tile__value" style={{ fontSize: '1.15rem' }}>New Inspection</div>
-          <div className="tile__foot">Record an observation in under 30 seconds</div>
+          <div className="tile__foot">One visit, every area you attend to</div>
         </Link>
-        <StatTile label="My Inspections" value={number(tiles.my_inspections)} to="/inspections" icon="clipboard" />
+        <StatTile
+          label="My Inspections"
+          value={number(tiles.my_inspections)}
+          foot={tiles.my_areas_covered ? `${number(tiles.my_areas_covered)} areas · ${number(tiles.my_items_checked)} items checked` : undefined}
+          to="/inspections"
+          icon="clipboard"
+        />
         <StatTile label="Pending Observations" value={number(tiles.pending_observations)} to="/observations?open=1" icon="list" />
         <StatTile
           label={isSupervisor ? 'Compliance Pending' : 'Awaiting Verification'}

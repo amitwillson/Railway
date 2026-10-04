@@ -255,14 +255,18 @@ export function narrativeFor({ inspection, byArea, observations, previous }) {
     const reviewed = previous.items.filter((i) => i.review);
     const complied = reviewed.filter((i) => i.review.finding === 'complied');
     const n = previous.items.length;
-    parts.push(
-      `The previous inspection (${previous.previous.ref_no}, `
-        + `${(previous.previous.started_at ?? previous.previous.created_at ?? '').slice(0, 10)}) `
-        + `left ${n} item${n === 1 ? '' : 's'} outstanding`
-        + (reviewed.length
-          ? `; ${complied.length} of the ${reviewed.length} reviewed ${complied.length === 1 ? 'has' : 'have'} since been complied with.`
-          : `, which ${n === 1 ? 'is' : 'are'} listed at Part I for review.`)
-    );
+    const cite = `The previous inspection (${previous.previous.ref_no}, `
+      + `${(previous.previous.started_at ?? previous.previous.created_at ?? '').slice(0, 10)})`;
+    if (n === 0) {
+      parts.push(`${cite} left nothing outstanding.`);
+    } else {
+      parts.push(
+        `${cite} left ${n} item${n === 1 ? '' : 's'} outstanding`
+          + (reviewed.length
+            ? `; ${complied.length} of the ${reviewed.length} reviewed ${complied.length === 1 ? 'has' : 'have'} since been complied with.`
+            : `, which ${n === 1 ? 'is' : 'are'} listed at Part I for review.`)
+      );
+    }
   }
   return parts.join(' ');
 }

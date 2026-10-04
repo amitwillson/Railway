@@ -6,15 +6,18 @@ import { useToast } from '../state/ToastContext';
 import Icon from '../components/Icon';
 import ObservationCard from '../components/ObservationCard';
 import {
-  Badge, Banner, Button, Card, EmptyState, Field, Loading, Sheet, SignaturePad,
+  Badge, Banner, Button, Card, EmptyState, Field, Loading, Sheet, SignaturePad, Tabs,
 } from '../components/ui';
+import { AreaSummary, CoverageStrip, PreviousReview } from '../components/InspectionSheet';
 import { formatDate, formatDateTime, moduleTone, titleCase } from '../lib/format';
-import type { Approval, Inspection, Observation } from '../api/types';
+import type { Approval, Inspection, InspectionReport, Observation } from '../api/types';
 
 interface Payload extends Inspection {
   observations: Observation[];
   approvals: Approval[];
 }
+
+type Tab = 'report' | 'areas' | 'deficiencies';
 
 export default function InspectionDetail() {
   const { id } = useParams();
@@ -26,6 +29,11 @@ export default function InspectionDetail() {
   const [summary, setSummary] = useState<{ text: string } | null>(null);
   const [signature, setSignature] = useState<string | null>(null);
   const [remarks, setRemarks] = useState('');
+  // The report is assembled from the inspection on demand, so the status of every
+  // item it cites reads live against the wording as it was issued.
+  const [report, setReport] = useState<InspectionReport | null>(null);
+  const [tab, setTab] = useState<Tab>('report');
+  const [issuing, setIssuing] = useState(false);
 
   const load = useCallback(() => {
     if (!id) return;
@@ -41,7 +49,8 @@ export default function InspectionDetail() {
   useEffect(() => {
     if (!id) return;
     api.get<{ text: string }>(`/inspections/${id}/summary`).then(setSummary).catch(() => {});
-  }, [id, data?.observation_count]);
+    api.get<InspectionReport>(`/inspections/${id}/report`).then(setReport).catch(() => setReport(null));
+  }, [id, data?.observation_count, data?.report_status]);
 
   if (loading && !data) return <Loading label="Opening inspection" />;
   if (!data) return <Card><EmptyState icon="alert" title="Inspection not found" /></Card>;
@@ -49,6 +58,21 @@ export default function InspectionDetail() {
   const place = data.station_name
     ? `${data.station_name} (${data.station_code})`
     : [data.train_number, data.train_name].filter(Boolean).join(' ') || data.section || '-';
+
+  /** Issuing gives the report its office running number and fixes its date. */
+  const issue = async () => {
+    if (!data) return;
+    setIssuing(true);
+    try {
+      const next = await api.post<Inspection>(`/inspections/${data.id}/issue`, {});
+      toast.success(`Report issued as ${next.inspection_no}`);
+      load();
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : 'Could not issue the report');
+    } finally {
+      setIssuing(false);
+    }
+  };
 
   const complete = async () => {
     try {
@@ -99,6 +123,7 @@ export default function InspectionDetail() {
         </div>
         <div className="small strong" style={{ marginBottom: 8 }}>{data.inspection_type_name}</div>
         <dl className="kv">
+          {data.inspection_no && (<><dt>Report No.</dt><dd className="strong">{data.inspection_no}</dd></>)}
           <dt>Location</dt>
           <dd>
             {data.station_id ? <Link to={`/stations/${data.station_id}`}>{place}</Link> :
@@ -107,10 +132,47 @@ export default function InspectionDetail() {
           </dd>
           <dt>Inspecting officer</dt>
           <dd>{data.inspector_name}{data.inspector_designation ? `, ${data.inspector_designation}` : ''}</dd>
-          <dt>Started</dt><dd>{formatDateTime(data.started_at ?? data.created_at)}</dd>
+          <dt>Started</dt>
+          <dd>
+            {formatDateTime(data.started_at ?? data.created_at)}
+            {data.from_time && (
+              <div className="xsmall muted">
+                {data.from_time}{data.to_time ? ` to ${data.to_time}` : ''} hrs
+              </div>
+            )}
+          </dd>
           {data.completed_at && (<><dt>Completed</dt><dd>{formatDateTime(data.completed_at)}</dd></>)}
-          {data.joint_with && (<><dt>Joint inspection with</dt><dd>{data.joint_with}</dd></>)}
-          <dt>Observations</dt>
+          {data.joint_with && (<><dt>Accompanied by</dt><dd>{data.joint_with}</dd></>)}
+          {data.previous_ref_no && (
+            <>
+              <dt>Previous inspection</dt>
+              <dd>
+                {data.previous_inspection_id ? (
+                  <Link to={`/inspections/${data.previous_inspection_id}`}>{data.previous_ref_no}</Link>
+                ) : data.previous_ref_no}
+                {data.previous_started_at && (
+                  <span className="xsmall muted"> · {formatDate(data.previous_started_at)}</span>
+                )}
+              </dd>
+            </>
+          )}
+          {/* The coverage is the headline of an inspection; the deficiencies follow. */}
+          <dt>Areas</dt>
+          <dd>
+            <b className="mono-num">{data.areas_covered}</b> of{' '}
+            <b className="mono-num">{data.areas_on_sheet - data.areas_not_available}</b> attended to ·{' '}
+            <b className="mono-num">{data.areas_satisfactory}</b> in order ·{' '}
+            <b className="mono-num">{data.areas_with_deficiencies}</b> with deficiencies
+            {data.areas_not_inspected > 0 && (
+              <> · <b className="mono-num">{data.areas_not_inspected}</b> not inspected</>
+            )}
+          </dd>
+          <dt>Items checked</dt>
+          <dd>
+            <b className="mono-num">{data.items_checked}</b> checked ·{' '}
+            <b className="mono-num">{data.items_ok}</b> found in order
+          </dd>
+          <dt>Deficiencies</dt>
           <dd>
             <b className="mono-num">{data.observation_count}</b> total ·{' '}
             <b className="mono-num">{data.open_count}</b> open ·{' '}
@@ -118,6 +180,12 @@ export default function InspectionDetail() {
             {data.critical_count > 0 && <> · <b className="mono-num" style={{ color: 'var(--critical)' }}>{data.critical_count}</b> critical</>}
           </dd>
         </dl>
+
+        {data.areas_on_sheet > 0 && report && (
+          <div style={{ margin: '4px -14px -8px' }}>
+            <CoverageStrip coverage={report.coverage} compact />
+          </div>
+        )}
 
         <div className="row row--wrap" style={{ gap: 8, marginTop: 14 }}>
           {data.status !== 'completed' && (
@@ -133,48 +201,124 @@ export default function InspectionDetail() {
           {data.status !== 'completed' && (
             <Button size="sm" icon="check" onClick={() => setCompleting(true)}>Complete inspection</Button>
           )}
+          {data.status === 'completed' && data.report_status !== 'issued' && (
+            <Button size="sm" icon="send" loading={issuing} onClick={issue}>Issue the report</Button>
+          )}
+          {data.report_status === 'issued' && (
+            <Badge tone="good">Report issued {data.report_issued_at ? formatDate(data.report_issued_at) : ''}</Badge>
+          )}
         </div>
       </Card>
 
-      {(data.summary || summary?.text) && (
-        <Card title="Automatic summary" icon="file">
-          <p className="small" style={{ lineHeight: 1.6 }}>{data.summary ?? summary?.text}</p>
-        </Card>
-      )}
+      <Tabs
+        value={tab}
+        onChange={setTab}
+        tabs={[
+          { key: 'report', label: 'Report' },
+          { key: 'areas', label: 'Areas', count: data.areas_on_sheet },
+          { key: 'deficiencies', label: 'Deficiencies', count: data.observation_count },
+        ]}
+      />
 
-      {data.approvals.length > 0 && (
-        <Card title="Signatures" icon="signature">
-          {data.approvals.map((a) => (
-            <div className="row" style={{ gap: 10, marginBottom: 8 }} key={a.id}>
-              {a.signature_data && (
-                <img src={a.signature_data} alt="Signature" style={{ height: 38, background: '#fff', border: '1px solid var(--line)', borderRadius: 4 }} />
-              )}
-              <div>
-                <div className="small strong">{a.user_name}{a.designation ? `, ${a.designation}` : ''}</div>
-                <div className="xsmall muted">{titleCase(a.approval_role)} · {formatDate(a.signed_at)}</div>
-                {a.remarks && <div className="xsmall">{a.remarks}</div>}
-              </div>
-            </div>
-          ))}
-        </Card>
-      )}
-
-      <div>
-        <div className="section-label">Observations ({data.observations.length})</div>
-        {data.observations.length === 0 ? (
-          <Card>
-            <EmptyState
-              icon="check"
-              title="No deficiency recorded"
-              text="This inspection has no observations. That is a valid outcome - the report will say so."
-            />
+      {tab === 'report' && (
+        <>
+          <Card title="Summary" icon="file">
+            <p className="small" style={{ lineHeight: 1.6 }}>
+              {report?.narrative ?? data.summary ?? summary?.text ?? 'No summary yet.'}
+            </p>
           </Card>
-        ) : (
-          <div className="stack" style={{ '--gap': '10px' } as React.CSSProperties}>
-            {data.observations.map((o) => <ObservationCard key={o.id} observation={o} showModule={false} />)}
-          </div>
-        )}
-      </div>
+
+          {/* Part I - what the previous inspection of this place left outstanding. */}
+          {report && (
+            <PreviousReview
+              previousRef={report.previous_inspection?.ref_no ?? null}
+              items={report.previous_items}
+              readOnly
+            />
+          )}
+
+          {/* Part IV - what was checked and found in order. A list of deficiencies
+              cannot have this part, and it is what makes the document a report. */}
+          {report && report.items_in_order.length > 0 && (
+            <Card
+              title={`Part IV · Checked and found in order (${report.items_in_order.length})`}
+              subtitle="Recorded so the report shows what was inspected, not only what was found wanting"
+              icon="check"
+              pad={false}
+            >
+              <div>
+                {report.areas
+                  .filter((a) => (a.items_ok ?? []).length > 0)
+                  .map((area) => (
+                    <div className="sheet-row" key={area.id}>
+                      <div className="small strong">{area.unit_name}</div>
+                      <div className="xsmall muted" style={{ marginTop: 2 }}>
+                        {(area.items_ok ?? []).map((r) => r.item_name).join(', ')}
+                      </div>
+                    </div>
+                  ))}
+              </div>
+            </Card>
+          )}
+
+          {data.general_remarks && (
+            <Card title="Part V · General remarks" icon="edit">
+              <p className="small" style={{ lineHeight: 1.6 }}>{data.general_remarks}</p>
+            </Card>
+          )}
+
+          {data.approvals.length > 0 && (
+            <Card title="Signatures" icon="signature">
+              {data.approvals.map((a) => (
+                <div className="row" style={{ gap: 10, marginBottom: 8 }} key={a.id}>
+                  {a.signature_data && (
+                    <img src={a.signature_data} alt="Signature" style={{ height: 38, background: '#fff', border: '1px solid var(--line)', borderRadius: 4 }} />
+                  )}
+                  <div>
+                    <div className="small strong">{a.user_name}{a.designation ? `, ${a.designation}` : ''}</div>
+                    <div className="xsmall muted">{titleCase(a.approval_role)} · {formatDate(a.signed_at)}</div>
+                    {a.remarks && <div className="xsmall">{a.remarks}</div>}
+                  </div>
+                </div>
+              ))}
+            </Card>
+          )}
+        </>
+      )}
+
+      {tab === 'areas' && (
+        <Card
+          title="Part II · Areas inspected"
+          subtitle="Every area on the sheet, including those found in order and those not attended to"
+          icon="list"
+          pad={false}
+        >
+          <AreaSummary areas={report?.areas ?? data.areas ?? []} />
+        </Card>
+      )}
+
+      {tab === 'deficiencies' && (
+        <div>
+          <div className="section-label">Part III · Deficiencies noticed ({data.observations.length})</div>
+          {data.observations.length === 0 ? (
+            <Card>
+              <EmptyState
+                icon="check"
+                title="No deficiency recorded"
+                text={
+                  data.areas_covered > 0
+                    ? `${data.areas_covered} area(s) were attended to and nothing was found wanting. The report says so.`
+                    : 'This inspection has no observations. That is a valid outcome - the report will say so.'
+                }
+              />
+            </Card>
+          ) : (
+            <div className="stack" style={{ '--gap': '10px' } as React.CSSProperties}>
+              {data.observations.map((o) => <ObservationCard key={o.id} observation={o} showModule={false} />)}
+            </div>
+          )}
+        </div>
+      )}
 
       {completing && (
         <Sheet

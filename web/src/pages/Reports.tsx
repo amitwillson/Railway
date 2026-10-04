@@ -7,7 +7,14 @@ import { Badge, Banner, Button, Card, Field, Loading, SearchSelect } from '../co
 import { todayIso, addDays } from '../lib/format';
 import type { Station } from '../api/types';
 
-interface CatalogueEntry { key: string; name: string; path: string; description: string }
+interface CatalogueEntry {
+  key: string; name: string; path: string; description: string;
+  /** Set when the report is of one entity and is opened from that entity's page. */
+  entity?: string;
+}
+
+/** The reports whose unit is the inspection rather than the observation. */
+const INSPECTION_REPORTS = ['inspection', 'inspection-register', 'inspector-wise'];
 
 const FORMATS: { key: 'pdf' | 'xlsx' | 'csv'; label: string; icon: 'file' | 'download' }[] = [
   { key: 'pdf', label: 'PDF', icon: 'file' },
@@ -53,13 +60,49 @@ export default function Reports() {
   );
 
   const runPreview = (entry: CatalogueEntry) => {
-    if (entry.key === 'inspection') return;
+    if (entry.entity) return;
     setPreviewing(entry.key);
     api.get<{ title: string; count: number; data: Record<string, unknown>[] }>(`/reports/${entry.key}`, { ...params, format: 'json' })
       .then((r) => setPreview({ key: entry.key, title: r.title, rows: r.data.slice(0, 25) }))
       .catch(() => setPreview(null))
       .finally(() => setPreviewing(null));
   };
+
+  /** One report in the catalogue: its formats and its preview. */
+  const ReportCard = ({ entry }: { entry: CatalogueEntry }) => (
+    <Card title={entry.name} subtitle={entry.description} icon="file">
+      {entry.entity ? (
+        <p className="small muted">
+          Open any inspection and use its PDF or Excel button. The report carries the areas covered, the items found
+          in order, the deficiencies with their target dates, the previous inspection's position, photographs,
+          signatures and a QR code for verification.
+        </p>
+      ) : (
+        <div className="row row--wrap" style={{ gap: 8 }}>
+          {exportReport ? (
+            <Button size="sm" variant="ghost" icon="download" onClick={() => exportReport?.(`/reports/${entry.key}`, params)}>
+              CSV
+            </Button>
+          ) : (
+            FORMATS.map((format) => (
+              <a
+                key={format.key}
+                className="btn btn--ghost btn--sm"
+                href={reportUrl(`/reports/${entry.key}`, { ...params, format: format.key })}
+                target={format.key === 'pdf' ? '_blank' : undefined}
+                rel="noreferrer"
+              >
+                <Icon name={format.icon} size={14} /> {format.label}
+              </a>
+            ))
+          )}
+          <Button size="sm" variant="quiet" loading={previewing === entry.key} onClick={() => runPreview(entry)}>
+            Preview
+          </Button>
+        </div>
+      )}
+    </Card>
+  );
 
   if (loading) return <Loading label="Loading reports" />;
 
@@ -110,49 +153,23 @@ export default function Reports() {
         </Banner>
       )}
 
+      {/* The inspection-based reports answer "was the inspecting done, and how much
+          of each station did it cover"; the rest count observations. */}
+      <div className="section-label" style={{ marginBottom: -6 }}>
+        Based on the inspection
+      </div>
       <div className="grid grid--wide">
-        {catalogue.map((entry) => (
-          <Card key={entry.key} title={entry.name} subtitle={entry.description} icon="file">
-            {entry.key === 'inspection' ? (
-              <p className="small muted">
-                Open any inspection and use its PDF or Excel button - the report carries the observations,
-                photographs, signatures and a QR code for verification.
-              </p>
-            ) : (
-              <div className="row row--wrap" style={{ gap: 8 }}>
-                {exportReport ? (
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    icon="download"
-                    onClick={() => exportReport?.(`/reports/${entry.key}`, params)}
-                  >
-                    CSV
-                  </Button>
-                ) : (
-                  FORMATS.map((format) => (
-                    <a
-                      key={format.key}
-                      className="btn btn--ghost btn--sm"
-                      href={reportUrl(`/reports/${entry.key}`, { ...params, format: format.key })}
-                      target={format.key === 'pdf' ? '_blank' : undefined}
-                      rel="noreferrer"
-                    >
-                      <Icon name={format.icon} size={14} /> {format.label}
-                    </a>
-                  ))
-                )}
-                <Button
-                  size="sm"
-                  variant="quiet"
-                  loading={previewing === entry.key}
-                  onClick={() => runPreview(entry)}
-                >
-                  Preview
-                </Button>
-              </div>
-            )}
-          </Card>
+        {catalogue.filter((e) => INSPECTION_REPORTS.includes(e.key)).map((entry) => (
+          <ReportCard key={entry.key} entry={entry} />
+        ))}
+      </div>
+
+      <div className="section-label" style={{ marginBottom: -6 }}>
+        Based on the observations
+      </div>
+      <div className="grid grid--wide">
+        {catalogue.filter((e) => !INSPECTION_REPORTS.includes(e.key)).map((entry) => (
+          <ReportCard key={entry.key} entry={entry} />
         ))}
       </div>
 

@@ -7,7 +7,7 @@ import { Badge, Card, Loading, SearchSelect, StatTile, Tabs } from '../component
 import { BarChart, StackedBars } from '../components/charts/BarChart';
 import { TrendChart, type TrendPoint } from '../components/charts/TrendChart';
 import { STATUS_COLOR } from '../components/charts/theme';
-import { number, moduleTone } from '../lib/format';
+import { formatDate, moduleTone, number } from '../lib/format';
 import type { DashboardOverview, ModuleStat, Module } from '../api/types';
 
 interface DepartmentRow {
@@ -44,7 +44,40 @@ interface SupervisorRow {
   closed: number; avg_response_days: number | null;
 }
 
-type Tab = 'overview' | 'modules' | 'departments' | 'stations' | 'repeats' | 'supervisors';
+type Tab = 'overview' | 'inspections' | 'modules' | 'departments' | 'stations' | 'repeats' | 'supervisors';
+
+/**
+ * The inspection-wise panel. Every other panel counts observations, which says
+ * what is wrong; this one counts visits and coverage, which says whether the
+ * inspecting is happening and how much of each station it reached.
+ */
+interface InspectionDashboard {
+  totals: {
+    inspections: number; completed: number; in_progress: number; reports_issued: number;
+    inspectors: number; locations: number;
+    areas_on_sheet: number; areas_covered: number; areas_satisfactory: number;
+    areas_with_deficiencies: number; areas_not_inspected: number; areas_not_available: number;
+    items_checked: number; items_ok: number; observations: number;
+    coverage_pct: number | null; observations_per_inspection: number; areas_per_inspection: number;
+  };
+  by_inspector: {
+    inspector_id: number; inspector_name: string; inspector_designation: string | null;
+    inspections: number; areas_covered: number; items_checked: number; observations: number;
+    last_inspection: string | null;
+  }[];
+  by_module: { module_id: number; module_code: string; module_name: string; module_accent: string | null;
+    inspections: number; areas_covered: number; observations: number }[];
+  recent: {
+    id: number; ref_no: string; inspection_no: string | null; title: string | null;
+    station_name: string | null; station_code: string | null; train_number: string | null;
+    module_code: string; inspection_type_name: string; inspector_name: string;
+    started_at: string | null; created_at: string;
+    areas_on_sheet: number; areas_covered: number; areas_satisfactory: number;
+    areas_with_deficiencies: number; coverage_pct: number | null;
+    items_checked: number; observation_count: number; open_count: number;
+    status: string; report_status: string;
+  }[];
+}
 
 const RANGES = [
   { value: '30', label: 'Last 30 days' },
@@ -70,6 +103,7 @@ export default function Dashboard() {
   const [repeats, setRepeats] = useState<RepeatRow[]>([]);
   const [deficiencies, setDeficiencies] = useState<DeficiencyRow[]>([]);
   const [supervisors, setSupervisors] = useState<SupervisorRow[]>([]);
+  const [inspections, setInspections] = useState<InspectionDashboard | null>(null);
   const [loading, setLoading] = useState(true);
 
   const filters = useCallback(
@@ -94,8 +128,9 @@ export default function Dashboard() {
       api.get<{ data: RepeatRow[] }>('/dashboard/repeats', { ...f, limit: 15 }),
       api.get<{ data: SupervisorRow[] }>('/dashboard/supervisors', f),
       api.get<{ data: DeficiencyRow[] }>('/dashboard/deficiencies', { ...f, limit: 15 }),
+      api.get<InspectionDashboard>('/dashboard/inspections', { ...f, limit: 10 }),
     ])
-      .then(([o, m, d, s, sev, t, r, sup, def]) => {
+      .then(([o, m, d, s, sev, t, r, sup, def, insp]) => {
         setOverview(o);
         setModulesStat(m.data);
         setDepartments(d.data);
@@ -105,6 +140,7 @@ export default function Dashboard() {
         setRepeats(r.data);
         setSupervisors(sup.data);
         setDeficiencies(def.data);
+        setInspections(insp);
       })
       .catch(() => {})
       .finally(() => setLoading(false));
@@ -163,6 +199,7 @@ export default function Dashboard() {
       <Tabs
         tabs={[
           { key: 'overview', label: 'Overview' },
+          { key: 'inspections', label: 'Inspection-wise' },
           { key: 'modules', label: 'Module-wise' },
           { key: 'departments', label: 'Department-wise' },
           { key: 'stations', label: 'Station-wise' },
@@ -238,6 +275,91 @@ export default function Dashboard() {
               </div>
             </Card>
           </div>
+        </>
+      )}
+
+      {tab === 'inspections' && inspections && (
+        <>
+          {/* Visits and coverage. One inspector attends to many areas in a visit,
+              so the visit is what is counted here - never the area. */}
+          <div className="grid grid--tiles">
+            <StatTile label="Inspections" value={number(inspections.totals.inspections)}
+              foot={`${number(inspections.totals.in_progress)} in progress`} to="/inspections?scope=all" />
+            <StatTile label="Locations inspected" value={number(inspections.totals.locations)} />
+            <StatTile label="Inspecting officers" value={number(inspections.totals.inspectors)} />
+            <StatTile label="Areas attended to" value={number(inspections.totals.areas_covered)}
+              foot={`of ${number(inspections.totals.areas_on_sheet - inspections.totals.areas_not_available)} on the sheets`} />
+            <StatTile label="Coverage" value={`${inspections.totals.coverage_pct ?? 0}%`}
+              foot={`${inspections.totals.areas_per_inspection} areas per inspection`} />
+            <StatTile label="Areas found in order" value={number(inspections.totals.areas_satisfactory)} />
+            <StatTile label="Items checked" value={number(inspections.totals.items_checked)}
+              foot={`${number(inspections.totals.items_ok)} found in order`} />
+            <StatTile label="Deficiencies raised" value={number(inspections.totals.observations)}
+              foot={`${inspections.totals.observations_per_inspection} per inspection`} />
+            <StatTile label="Reports issued" value={number(inspections.totals.reports_issued)} />
+          </div>
+
+          <Card title="By inspecting officer" subtitle="Visits, coverage and what they raised" icon="users" pad={false}>
+            <div className="table-wrap">
+              <table className="data">
+                <thead>
+                  <tr>
+                    <th>Officer</th><th className="num">Inspections</th><th className="num">Areas</th>
+                    <th className="num">Items checked</th><th className="num">Deficiencies</th><th>Last inspection</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {inspections.by_inspector.map((r) => (
+                    <tr key={r.inspector_id}>
+                      <td>
+                        {r.inspector_name}
+                        {r.inspector_designation && <div className="xsmall muted">{r.inspector_designation}</div>}
+                      </td>
+                      <td className="num mono-num">{r.inspections}</td>
+                      <td className="num mono-num">{r.areas_covered}</td>
+                      <td className="num mono-num">{r.items_checked}</td>
+                      <td className="num mono-num">{r.observations}</td>
+                      <td className="xsmall">{r.last_inspection ? formatDate(r.last_inspection) : '-'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </Card>
+
+          <Card title="Recent inspections" subtitle="How much of each location the visit covered" icon="clipboard" pad={false}>
+            <div className="table-wrap">
+              <table className="data">
+                <thead>
+                  <tr>
+                    <th>Inspection</th><th>Location</th><th>Officer</th>
+                    <th className="num">Areas</th><th className="num">Coverage</th>
+                    <th className="num">Items</th><th className="num">Deficiencies</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {inspections.recent.map((r) => (
+                    <tr key={r.id}>
+                      <td>
+                        <Link to={`/inspections/${r.id}`}>{r.inspection_no ?? r.ref_no}</Link>
+                        <div className="xsmall muted">
+                          {formatDate(r.started_at ?? r.created_at)} · {r.inspection_type_name}
+                        </div>
+                      </td>
+                      <td className="small">
+                        {r.station_name ? `${r.station_name} (${r.station_code})` : r.train_number ?? '-'}
+                      </td>
+                      <td className="xsmall">{r.inspector_name}</td>
+                      <td className="num mono-num">{r.areas_covered}/{r.areas_on_sheet}</td>
+                      <td className="num mono-num">{r.coverage_pct ?? 0}%</td>
+                      <td className="num mono-num">{r.items_checked}</td>
+                      <td className="num mono-num">{r.observation_count}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </Card>
         </>
       )}
 

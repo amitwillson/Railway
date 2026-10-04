@@ -187,10 +187,17 @@ export interface Bootstrap {
   counts: { stations: number; trains: number; items: number; supervisors: number };
 }
 
+/**
+ * An inspection is one visit by one officer over as many areas as were attended
+ * to, so it carries its own coverage: the areas on its sheet and how each was
+ * found. `scope` says what kind of place it covers and never names an area.
+ */
 export interface Inspection {
-  id: number; ref_no: string; module_id: number; module_code: string; module_name: string;
+  id: number; ref_no: string; inspection_no: string | null;
+  module_id: number; module_code: string; module_name: string;
   module_accent: string | null;
   inspection_type_id: number; inspection_type_name: string;
+  scope: InspectionScope;
   location_type: string; section: string | null; title: string | null;
   station_id: number | null; station_name: string | null; station_code: string | null;
   station_category?: string | null; division_name?: string | null;
@@ -198,10 +205,119 @@ export interface Inspection {
   inspector_id: number; inspector_name: string; inspector_designation: string | null;
   joint_with: string | null;
   planned_date: string | null; started_at: string | null; completed_at: string | null;
+  from_time: string | null; to_time: string | null;
+  previous_inspection_id: number | null;
+  previous_ref_no?: string | null; previous_started_at?: string | null;
   status: 'planned' | 'in_progress' | 'completed' | 'cancelled';
-  summary: string | null; auto_summary: string | null; notes: string | null;
+  report_status: 'draft' | 'issued';
+  report_issued_at: string | null;
+  summary: string | null; auto_summary: string | null;
+  general_remarks: string | null; notes: string | null;
   qr_token: string | null; created_at: string;
   observation_count: number; open_count: number; closed_count: number; critical_count: number;
+  /* coverage, computed in the view so every report agrees on it */
+  areas_on_sheet: number; areas_covered: number; areas_satisfactory: number;
+  areas_with_deficiencies: number; areas_not_inspected: number; areas_not_available: number;
+  coverage_pct: number | null;
+  items_checked: number; items_ok: number; items_deficient: number;
+  previous_reviewed?: number; previous_complied?: number; previous_outstanding?: number;
+  /* present on the create response */
+  sheet_opened?: number;
+  /* present on the detail response */
+  areas?: InspectionArea[];
+  item_results?: InspectionItemResult[];
+}
+
+export type InspectionScope = 'station' | 'train' | 'section';
+
+export type AreaResult = 'satisfactory' | 'deficiencies' | 'not_inspected' | 'not_available';
+export type ItemResult = 'ok' | 'deficient' | 'not_applicable';
+export type PreviousFinding = 'complied' | 'partially_complied' | 'not_complied' | 'dropped';
+
+/** One area on an inspection's sheet. */
+export interface InspectionArea {
+  id: number; inspection_id: number;
+  unit_id: number | null; unit_name: string; unit_kind: string | null;
+  coach: string | null;
+  result: AreaResult; result_label?: string;
+  remarks: string | null; sort_order: number;
+  inspected_at: string | null;
+  item_results?: InspectionItemResult[];
+  items?: InspectionItemResult[];
+  items_ok?: InspectionItemResult[];
+  observations?: Observation[];
+  catalogue?: { group_id: number; group_name: string; items: InspectionItem[] }[];
+}
+
+/** What was checked inside an area, and how it was found. */
+export interface InspectionItemResult {
+  id: number; inspection_id: number; inspection_area_id: number | null;
+  unit_id: number | null; item_id: number | null; item_name: string;
+  group_name: string | null; result: ItemResult;
+  parameters?: ObservationParameter[];
+  remarks: string | null; observation_id: number | null; recorded_at: string;
+}
+
+/** Coverage counters, shared by the sheet, the report and the dashboards. */
+export interface InspectionCoverage {
+  areas_on_sheet: number; areas_covered: number; areas_satisfactory: number;
+  areas_with_deficiencies: number; areas_not_inspected: number; areas_not_available: number;
+  coverage_pct: number | null;
+  items_checked: number; items_ok: number; items_deficient: number;
+}
+
+export interface InspectionSheet {
+  inspection: Inspection;
+  areas: InspectionArea[];
+  unplaced_observations: Observation[];
+  available_areas: { id: number; name: string; kind: string | null; sort_order: number }[];
+  coverage: InspectionCoverage;
+}
+
+/** An item the previous inspection left outstanding, with this visit's finding. */
+export interface PreviousItem {
+  id: number; ref_no: string; unit_name: string | null; item_name: string | null;
+  observation: string; status: ObservationStatus; tdc: string | null;
+  severity_name: string; severity_rank: number; department_name: string;
+  supervisor_name: string | null; is_overdue: number; days_to_tdc: number | null;
+  observed_at: string;
+  review: { finding: PreviousFinding; remarks: string | null; reviewed_at: string } | null;
+  finding_label?: string;
+}
+
+export interface PreviousOutstanding {
+  previous: Inspection | null;
+  items: PreviousItem[];
+}
+
+/** The report model: the parts, assembled from the inspection on demand. */
+export interface InspectionReport {
+  inspection: Inspection;
+  defaults: {
+    letterhead: string; office: string; number_prefix: string;
+    submitted_to: string; copy_to: string; closing: string;
+  };
+  place: { preposition: string; name: string };
+  coverage: InspectionCoverage;
+  previous_inspection: Inspection | null;
+  previous_items: PreviousItem[];
+  areas: InspectionArea[];
+  areas_covered: InspectionArea[];
+  areas_not_covered: InspectionArea[];
+  observations: Observation[];
+  unplaced_observations: Observation[];
+  items_in_order: InspectionItemResult[];
+  approvals: Approval[];
+  narrative: string;
+  statistics: {
+    observations: number;
+    by_severity: Record<string, number>;
+    by_department: Record<string, number>;
+    with_tdc: number; overdue: number; repeated: number; closed: number; open: number;
+    critical: number;
+    coverage: InspectionCoverage;
+    previous_outstanding: number; previous_reviewed: number; previous_complied: number;
+  };
 }
 
 export interface ObservationParameter { parameter_id?: number | null; name: string; value?: boolean | string }

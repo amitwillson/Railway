@@ -117,14 +117,31 @@ export default function Inspections() {
                       {i.station_name ? `${i.station_name} (${i.station_code})` : [i.train_number, i.train_name].filter(Boolean).join(' ') || i.section || '-'}
                     </b>
                   </span>
-                  <span>{i.location_type}</span>
                   <span><Icon name="user" size={11} /> {i.inspector_name}</span>
                   <span>{formatDate(i.started_at ?? i.created_at)}</span>
+                  {i.from_time && <span>{i.from_time}{i.to_time ? `-${i.to_time}` : ''}</span>}
+                  {i.inspection_no && <span className="strong">{i.inspection_no}</span>}
                 </div>
-                <div className="row" style={{ gap: 12, marginTop: 7 }}>
-                  <span className="xsmall"><b className="mono-num">{i.observation_count}</b> <span className="muted">observations</span></span>
+                {/* How much of the place this visit covered. It is the first thing
+                    worth knowing about an inspection; the deficiencies follow. */}
+                {i.areas_on_sheet > 0 && (
+                  <div className="coverage__bar" style={{ marginTop: 8 }} aria-hidden="true">
+                    <span className="coverage__fill" style={{ width: `${Math.min(100, i.coverage_pct ?? 0)}%` }} />
+                  </div>
+                )}
+                <div className="row row--wrap" style={{ gap: 12, marginTop: 7 }}>
+                  {i.areas_on_sheet > 0 && (
+                    <span className="xsmall">
+                      <b className="mono-num">{i.areas_covered}</b>
+                      <span className="muted">/{i.areas_on_sheet - i.areas_not_available} areas</span>
+                      {i.coverage_pct != null && <span className="muted"> ({i.coverage_pct}%)</span>}
+                    </span>
+                  )}
+                  {i.items_checked > 0 && (
+                    <span className="xsmall"><b className="mono-num">{i.items_checked}</b> <span className="muted">items checked</span></span>
+                  )}
+                  <span className="xsmall"><b className="mono-num">{i.observation_count}</b> <span className="muted">deficiencies</span></span>
                   <span className="xsmall"><b className="mono-num">{i.open_count}</b> <span className="muted">open</span></span>
-                  <span className="xsmall"><b className="mono-num">{i.closed_count}</b> <span className="muted">closed</span></span>
                 </div>
               </Link>
             ))}

@@ -914,3 +914,87 @@ table.data a { font-weight: 600; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
 }
+
+/* ==========================================================================
+   The inspection sheet - one visit, many areas
+   ========================================================================== */
+
+.coverage { padding: 12px 14px 10px; }
+.coverage__bar {
+  height: 6px; border-radius: var(--r-pill); background: var(--surface-3);
+  overflow: hidden; margin-bottom: 10px;
+}
+.coverage__fill {
+  display: block; height: 100%; border-radius: var(--r-pill);
+  background: var(--accent); transition: width 240ms ease;
+}
+.coverage__cells {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(74px, 1fr)); gap: 8px;
+}
+.coverage__cell { text-align: center; }
+.coverage__cell b { display: block; font-size: 1.05rem; font-weight: 700; color: var(--ink); }
+.coverage__cell span {
+  display: block; font-size: 0.64rem; text-transform: uppercase; letter-spacing: 0.05em;
+  color: var(--muted); margin-top: 1px;
+}
+.coverage__note { margin-top: 9px; text-align: right; }
+
+.sheet-row { padding: 10px 14px; border-bottom: 1px solid var(--line); }
+.sheet-row:last-child { border-bottom: 0; }
+
+.sheet-area { border-bottom: 1px solid var(--line); }
+.sheet-area:last-child { border-bottom: 0; }
+.sheet-area--open { background: var(--surface-2); }
+.sheet-area__head {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  width: 100%; min-height: 46px; padding: 8px 14px;
+  background: none; border: 0; cursor: pointer; text-align: left; color: inherit;
+}
+.sheet-area__head:hover { background: var(--surface-3); }
+.sheet-area__name { font-weight: 600; font-size: 0.9rem; flex: 1 1 auto; min-width: 0; }
+.sheet-area__body { padding: 2px 14px 14px; }
+
+.sheet-item {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding: 6px 0; border-bottom: 1px solid var(--line);
+}
+.sheet-item:last-child { border-bottom: 0; }
+.sheet-item__name {
+  flex: 1 1 150px; min-width: 0; font-size: 0.83rem;
+  display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap;
+}
+.sheet-item__actions { display: inline-flex; gap: 5px; flex-wrap: wrap; }
+
+.chip--xs { min-height: 27px; padding: 0 8px; font-size: 0.72rem; gap: 3px; }
+
+@media (max-width: 520px) {
+  .sheet-item { align-items: flex-start; }
+  .sheet-item__name { flex-basis: 100%; }
+}
+
+.sheet-group { border-top: 1px solid var(--line); }
+.sheet-group:first-of-type { border-top: 0; }
+.sheet-group > summary {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 0; cursor: pointer; list-style: none;
+}
+.sheet-group > summary::-webkit-details-marker { display: none; }
+.sheet-group > summary::before {
+  content: '›'; font-size: 1.1rem; line-height: 1; color: var(--muted);
+  transition: transform 140ms ease; flex: none;
+}
+.sheet-group[open] > summary::before { transform: rotate(90deg); }
+.sheet-group__name {
+  flex: 1 1 auto; min-width: 0;
+  font-size: 0.7rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em;
+  color: var(--muted);
+}
+
+.setup > summary {
+  cursor: pointer; padding: 9px 13px; margin-bottom: 2px;
+  border: 1px dashed var(--line-strong); border-radius: var(--r-md);
+  color: var(--muted); list-style: none;
+}
+.setup > summary::-webkit-details-marker { display: none; }
+.setup > summary::after { content: ' · change'; font-weight: 600; color: var(--accent); }
+.setup[open] > summary::after { content: ' · hide'; }
