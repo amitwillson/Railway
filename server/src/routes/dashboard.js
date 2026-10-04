@@ -359,6 +359,123 @@ router.get('/supervisors', query(filterSchema), (req, res) => {
 });
 
 /** Compact payload for the mobile home screen. */
+/* --------------------------- inspection dashboard ------------------------- */
+
+/**
+ * The inspection-wise dashboard.
+ *
+ * Every other panel on this page counts observations, which answers what is wrong.
+ * This one counts inspections, which answers whether the inspecting is happening -
+ * how many visits, how much of each station they covered, how many items were
+ * actually checked. One inspector covering many areas in a visit makes the visit
+ * the thing worth counting, not the area.
+ */
+router.get(
+  '/inspections',
+  query(filterSchema.extend({ limit: z.coerce.number().int().min(1).max(200).default(12) })),
+  (req, res) => {
+    const f = req.validQuery;
+    const where = ['1=1'];
+    const params = [];
+    if (f.module_id) {
+      where.push('i.module_id = ?');
+      params.push(f.module_id);
+    }
+    if (f.module_code) {
+      where.push('i.module_code = ?');
+      params.push(f.module_code);
+    }
+    if (f.station_id) {
+      where.push('i.station_id = ?');
+      params.push(f.station_id);
+    }
+    if (f.division_id) {
+      where.push('i.station_id IN (SELECT id FROM stations WHERE division_id = ?)');
+      params.push(f.division_id);
+    }
+    if (f.mine) {
+      where.push('i.inspector_id = ?');
+      params.push(req.user.id);
+    }
+    if (f.days) {
+      where.push("date(COALESCE(i.started_at, i.created_at)) >= date('now','localtime',?)");
+      params.push(`-${f.days} days`);
+    }
+    if (f.from) {
+      where.push('date(COALESCE(i.started_at, i.created_at)) >= date(?)');
+      params.push(f.from);
+    }
+    if (f.to) {
+      where.push('date(COALESCE(i.started_at, i.created_at)) <= date(?)');
+      params.push(f.to);
+    }
+    const sql = where.join(' AND ');
+
+    const totals = get(
+      `SELECT COUNT(*) AS inspections,
+              SUM(CASE WHEN i.status = 'completed' THEN 1 ELSE 0 END) AS completed,
+              SUM(CASE WHEN i.status = 'in_progress' THEN 1 ELSE 0 END) AS in_progress,
+              SUM(CASE WHEN i.report_status = 'issued' THEN 1 ELSE 0 END) AS reports_issued,
+              COUNT(DISTINCT i.inspector_id) AS inspectors,
+              COUNT(DISTINCT COALESCE(i.station_id, -i.train_id)) AS locations,
+              COALESCE(SUM(i.areas_on_sheet), 0) AS areas_on_sheet,
+              COALESCE(SUM(i.areas_covered), 0) AS areas_covered,
+              COALESCE(SUM(i.areas_satisfactory), 0) AS areas_satisfactory,
+              COALESCE(SUM(i.areas_with_deficiencies), 0) AS areas_with_deficiencies,
+              COALESCE(SUM(i.areas_not_inspected), 0) AS areas_not_inspected,
+              COALESCE(SUM(i.areas_not_available), 0) AS areas_not_available,
+              COALESCE(SUM(i.items_checked), 0) AS items_checked,
+              COALESCE(SUM(i.items_ok), 0) AS items_ok,
+              COALESCE(SUM(i.observation_count), 0) AS observations
+         FROM v_inspections i WHERE ${sql}`,
+      params
+    );
+    const numeric = Object.fromEntries(Object.entries(totals).map(([k, v]) => [k, Number(v ?? 0)]));
+    const denominator = numeric.areas_on_sheet - numeric.areas_not_available;
+    numeric.coverage_pct = denominator ? Math.round((numeric.areas_covered / denominator) * 100) : null;
+    numeric.observations_per_inspection = numeric.inspections
+      ? Number((numeric.observations / numeric.inspections).toFixed(1))
+      : 0;
+    numeric.areas_per_inspection = numeric.inspections
+      ? Number((numeric.areas_covered / numeric.inspections).toFixed(1))
+      : 0;
+
+    res.json({
+      totals: numeric,
+      by_inspector: all(
+        `SELECT i.inspector_id, i.inspector_name, i.inspector_designation,
+                COUNT(*) AS inspections,
+                COALESCE(SUM(i.areas_covered), 0) AS areas_covered,
+                COALESCE(SUM(i.items_checked), 0) AS items_checked,
+                COALESCE(SUM(i.observation_count), 0) AS observations,
+                MAX(date(COALESCE(i.started_at, i.created_at))) AS last_inspection
+           FROM v_inspections i WHERE ${sql}
+          GROUP BY i.inspector_id ORDER BY inspections DESC, areas_covered DESC`,
+        params
+      ).map((r) => ({ ...r, inspections: Number(r.inspections) })),
+      by_module: all(
+        `SELECT i.module_id, i.module_code, i.module_name, i.module_accent,
+                COUNT(*) AS inspections,
+                COALESCE(SUM(i.areas_covered), 0) AS areas_covered,
+                COALESCE(SUM(i.observation_count), 0) AS observations
+           FROM v_inspections i WHERE ${sql}
+          GROUP BY i.module_id ORDER BY inspections DESC`,
+        params
+      ),
+      recent: all(
+        `SELECT i.id, i.ref_no, i.inspection_no, i.title, i.scope, i.status, i.report_status,
+                i.station_name, i.station_code, i.train_number, i.section, i.module_code,
+                i.inspection_type_name, i.inspector_name, i.started_at, i.created_at,
+                i.areas_on_sheet, i.areas_covered, i.areas_satisfactory, i.areas_with_deficiencies,
+                i.coverage_pct, i.items_checked, i.observation_count, i.open_count
+           FROM v_inspections i WHERE ${sql}
+          ORDER BY COALESCE(i.started_at, i.created_at) DESC, i.id DESC LIMIT ?`,
+        [...params, f.limit]
+      ),
+    });
+  }
+);
+
 router.get('/home', (req, res) => {
   const mine = metrics({ mine: true }, req.user);
   const assigned = metrics({ assigned_to_me: true }, req.user);
@@ -372,6 +489,20 @@ router.get('/home', (req, res) => {
       my_inspections: Number(
         get('SELECT COUNT(*) AS n FROM inspections WHERE inspector_id = ?', [req.user.id]).n
       ),
+      // What this officer's inspecting actually covered, which a count of
+      // observations cannot show.
+      my_areas_covered: Number(
+        get(
+          'SELECT COALESCE(SUM(areas_covered), 0) AS n FROM v_inspections WHERE inspector_id = ?',
+          [req.user.id]
+        ).n
+      ),
+      my_items_checked: Number(
+        get(
+          'SELECT COALESCE(SUM(items_checked), 0) AS n FROM v_inspections WHERE inspector_id = ?',
+          [req.user.id]
+        ).n
+      ),
       my_observations: mine.total,
       pending_observations: all_.open,
       compliance_pending: assigned.open,
@@ -380,6 +511,18 @@ router.get('/home', (req, res) => {
       critical_open: all_.critical_open,
       closed: all_.closed,
     },
+    // An inspection still in progress is resumable work, so it leads the screen.
+    active_inspection:
+      get(
+        `SELECT i.id, i.ref_no, i.title, i.station_name, i.station_code, i.train_number,
+                i.module_code, i.inspection_type_name, i.started_at,
+                i.areas_on_sheet, i.areas_covered, i.areas_not_available, i.coverage_pct,
+                i.items_checked, i.observation_count
+           FROM v_inspections i
+          WHERE i.inspector_id = ? AND i.status = 'in_progress'
+          ORDER BY COALESCE(i.started_at, i.created_at) DESC LIMIT 1`,
+        [req.user.id]
+      ) ?? null,
     recent_observations: all(
       `SELECT o.id, o.ref_no, o.observation, o.status, o.severity_name, o.module_code,
               o.station_name, o.unit_name, o.item_name, o.tdc, o.is_overdue, o.observed_at

@@ -7,8 +7,9 @@ import { authenticate, requireCapability } from '../middleware/auth.js';
 import { asyncRoute, download } from '../lib/http.js';
 import { query, z, optionalId, optionalText, optionalIsoDate, optionalBool } from '../lib/validate.js';
 import { observationFilter, decorate } from '../lib/queries.js';
-import { toCsv, toXlsx, streamPdf, attachmentPath } from '../lib/exporters.js';
-import { buildAutoSummary } from './inspections.js';
+import { toCsv, toXlsx, streamPdf, streamInspectionReportPdf, attachmentPath } from '../lib/exporters.js';
+import { reportFor } from '../lib/inspectionReport.js';
+import { inspectionScopeClause } from '../lib/queries.js';
 
 const router = express.Router();
 
@@ -237,7 +238,9 @@ router.get('/catalogue', (_req, res) => {
   res.json({
     formats: FORMATS,
     data: [
-      { key: 'inspection', name: 'Inspection Report', path: '/api/reports/inspection/:id', description: 'Full record of one inspection with observations, evidence and signatures' },
+      { key: 'inspection', name: 'Inspection Report', path: '/api/reports/inspection/:id', description: 'One inspection in full: areas covered, items checked, deficiencies, previous-inspection review and signatures', entity: 'inspection' },
+      { key: 'inspection-register', name: 'Inspection Register', path: '/api/reports/inspection-register', description: 'One row per inspection - what inspection work was done, how much of each station was covered' },
+      { key: 'inspector-wise', name: 'Inspector-wise Report', path: '/api/reports/inspector-wise', description: 'Inspections, coverage and closure by the officer who carried them out' },
       { key: 'compliance', name: 'Compliance Report', path: '/api/reports/compliance', description: 'Action taken, compliance date, verification and closure' },
       { key: 'pending', name: 'Pending Report', path: '/api/reports/pending', description: 'Every observation awaiting compliance' },
       { key: 'overdue', name: 'Overdue Report', path: '/api/reports/overdue', description: 'Observations past their target date of compliance' },
@@ -249,48 +252,163 @@ router.get('/catalogue', (_req, res) => {
   });
 });
 
-/* ------------------------------ 1. inspection ----------------------------- */
+/* ------------------------- 1. the inspection report ----------------------- */
 
+/** Flattened area rows, for the CSV and Excel forms of the report. */
+const AREA_COLUMNS = [
+  { label: 'Sl', key: 'sl' },
+  { label: 'Area', key: 'unit_name' },
+  { label: 'Result', key: 'result_label' },
+  { label: 'Items checked', key: 'items_count' },
+  { label: 'Found in order', key: 'ok_count' },
+  { label: 'Deficiencies', key: 'deficiency_count' },
+  { label: 'Remarks', key: 'remarks' },
+  { label: 'Inspected at', key: 'inspected_at' },
+];
+
+const ITEM_RESULT_COLUMNS = [
+  { label: 'Area', key: 'area_name' },
+  { label: 'Group', key: 'group_name' },
+  { label: 'Item', key: 'item_name' },
+  { label: 'Result', key: 'result' },
+  { label: 'Remarks', key: 'remarks' },
+  { label: 'Observation', key: 'observation_ref' },
+];
+
+const PREVIOUS_COLUMNS = [
+  { label: 'Sl', key: 'sl' },
+  { label: 'Ref', key: 'ref_no' },
+  { label: 'Area', key: 'unit_name' },
+  { label: 'Item', key: 'item_name' },
+  { label: 'Deficiency', key: 'observation' },
+  { label: 'Action by', key: 'department_name' },
+  { label: 'TDC', key: 'tdc' },
+  { label: 'Position at this inspection', key: 'finding_label' },
+  { label: 'Remarks', key: 'review_remarks' },
+];
+
+/** The area rows the flat formats print. */
+function areaRows(report) {
+  return report.areas.map((area, i) => ({
+    sl: i + 1,
+    unit_name: area.unit_name,
+    result: area.result,
+    result_label: area.result_label,
+    items_count: area.items.length,
+    ok_count: area.items_ok.length,
+    deficiency_count: area.observations.length,
+    remarks: area.remarks ?? '',
+    inspected_at: area.inspected_at ?? '',
+  }));
+}
+
+function itemResultRows(report) {
+  const byId = new Map(report.observations.map((o) => [o.id, o.ref_no]));
+  return report.areas.flatMap((area) =>
+    area.items.map((r) => ({
+      area_name: area.unit_name,
+      group_name: r.group_name ?? '',
+      item_name: r.item_name,
+      result: r.result,
+      remarks: r.remarks ?? '',
+      observation_ref: r.observation_id ? byId.get(r.observation_id) ?? '' : '',
+    }))
+  );
+}
+
+function previousRows(report) {
+  return report.previous_items.map((item, i) => ({
+    sl: i + 1,
+    ref_no: item.ref_no,
+    unit_name: item.unit_name ?? '',
+    item_name: item.item_name ?? '',
+    observation: item.observation,
+    department_name: item.department_name,
+    tdc: item.tdc ?? '',
+    finding_label: item.finding_label,
+    review_remarks: item.review?.remarks ?? '',
+  }));
+}
+
+/**
+ * The inspection report: one visit by one officer over as many areas as were
+ * attended to. PDF is the office form; CSV and Excel carry the same parts as
+ * sheets so they can be worked on.
+ */
 router.get(
   '/inspection/:id',
   query(z.object({ format: z.enum(FORMATS).default('json'), photos: optionalBool.default(true) })),
   asyncRoute(async (req, res) => {
-    const inspection = get('SELECT * FROM v_inspections i WHERE i.id = ?', [req.params.id]);
-    if (!inspection) throw notFound('Inspection');
-    const observations = all('SELECT * FROM v_observations o WHERE o.inspection_id = ? ORDER BY o.id', [
-      inspection.id,
-    ]).map(decorate);
-    const approvals = all(
-      `SELECT * FROM approvals WHERE entity_type = 'inspection' AND entity_id = ? ORDER BY signed_at`,
-      [inspection.id]
-    );
-    const auto = buildAutoSummary(inspection.id);
+    const report = reportFor(Number(req.params.id));
+    const { inspection } = report;
     const { format } = req.validQuery;
-    const place = inspection.station_name
-      ? `${inspection.station_name} (${inspection.station_code})`
-      : [inspection.train_number, inspection.train_name].filter(Boolean).join(' ') || inspection.section || '-';
+    const stem = `inspection-${(inspection.inspection_no ?? inspection.ref_no).replace(/[^A-Za-z0-9-]+/g, '-')}`;
 
     if (format === 'json') {
-      res.json({ inspection, observations, approvals, auto_summary: auto });
+      res.json(report);
       return;
     }
     if (format === 'csv') {
-      download(res, { fileName: `inspection-${inspection.ref_no}.csv`, contentType: 'text/csv; charset=utf-8' });
-      res.send(toCsv(observations, OBSERVATION_COLUMNS));
+      // One file, the parts stacked - the shape a clerk can paste into a return.
+      const parts = [
+        `Inspection Report,${inspection.inspection_no ?? inspection.ref_no}`,
+        `Location,${report.place.name}`,
+        `Date,${(inspection.started_at ?? inspection.created_at ?? '').slice(0, 10)}`,
+        `Inspecting officer,"${inspection.inspector_name}"`,
+        `Areas on sheet,${report.coverage.areas_on_sheet}`,
+        `Areas attended to,${report.coverage.areas_covered}`,
+        `Items checked,${report.coverage.items_checked}`,
+        '',
+        'PART I - Review of the previous inspection',
+        toCsv(previousRows(report), PREVIOUS_COLUMNS),
+        '',
+        'PART II - Areas inspected',
+        toCsv(areaRows(report), AREA_COLUMNS),
+        '',
+        'PART III - Deficiencies noticed',
+        toCsv(report.observations.map(decorate), OBSERVATION_COLUMNS),
+        '',
+        'PART IV - Items checked, with result',
+        toCsv(itemResultRows(report), ITEM_RESULT_COLUMNS),
+      ];
+      download(res, { fileName: `${stem}.csv`, contentType: 'text/csv; charset=utf-8' });
+      res.send(parts.join('\n'));
       return;
     }
     if (format === 'xlsx') {
+      const subtitle = `${inspection.ref_no} | ${inspection.inspector_name} | ${(inspection.started_at ?? inspection.created_at ?? '').slice(0, 10)}`;
       const buffer = await toXlsx([
         {
-          name: 'Observations',
-          title: `${inspection.inspection_type_name} - ${place}`,
-          subtitle: `${inspection.ref_no} | ${inspection.inspector_name} | ${(inspection.started_at ?? inspection.created_at).slice(0, 10)}`,
+          name: 'Areas',
+          title: `Areas inspected - ${report.place.name}`,
+          subtitle,
+          columns: AREA_COLUMNS,
+          rows: areaRows(report),
+        },
+        {
+          name: 'Deficiencies',
+          title: `Deficiencies noticed - ${report.place.name}`,
+          subtitle,
           columns: OBSERVATION_COLUMNS,
-          rows: observations,
+          rows: report.observations.map(decorate),
+        },
+        {
+          name: 'Items',
+          title: 'Items checked, with result',
+          subtitle,
+          columns: ITEM_RESULT_COLUMNS,
+          rows: itemResultRows(report),
+        },
+        {
+          name: 'Previous inspection',
+          title: 'Review of the previous inspection',
+          subtitle,
+          columns: PREVIOUS_COLUMNS,
+          rows: previousRows(report),
         },
       ]);
       download(res, {
-        fileName: `inspection-${inspection.ref_no}.xlsx`,
+        fileName: `${stem}.xlsx`,
         contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
       });
       res.send(buffer);
@@ -302,121 +420,23 @@ router.get(
       entityType: 'inspection',
       entityId: inspection.id,
     });
-    streamPdf(
-      res,
-      {
-        fileName: `inspection-${inspection.ref_no}.pdf`,
-        title: 'Railway Inspection Report',
-        subtitle: `${inspection.module_name} | ${inspection.inspection_type_name}`,
-        meta: [
-          { label: 'Inspection ID', value: inspection.ref_no },
-          { label: 'Location', value: place },
-          { label: 'Date', value: (inspection.started_at ?? inspection.created_at).slice(0, 10) },
-          { label: 'Location type', value: inspection.location_type },
-          { label: 'Inspecting officer', value: `${inspection.inspector_name}${inspection.inspector_designation ? `, ${inspection.inspector_designation}` : ''}` },
-          { label: 'Division / Zone', value: [inspection.division_name, inspection.station_category].filter(Boolean).join(' | ') || '-' },
-          { label: 'Status', value: inspection.status },
-          { label: 'Joint inspection with', value: inspection.joint_with || '-' },
-        ],
-        verifyUrl: verification.url,
-      },
-      (doc, helpers) => {
-        if (auto?.text) {
-          doc.font('Helvetica-Bold').fontSize(9.5).text('Summary');
-          doc.moveDown(0.15);
-          doc.font('Helvetica').fontSize(8.5).fillColor('#33475b').text(auto.text, { align: 'justify' });
-          doc.fillColor('#0b2e4f').moveDown(0.6);
-        }
-        doc.font('Helvetica-Bold').fontSize(9.5).text(`Observations (${observations.length})`);
-        doc.moveDown(0.25);
-        if (observations.length === 0) {
-          doc.font('Helvetica').fontSize(9).text('No deficiency was noticed during this inspection.');
-        } else {
-          helpers.table(
-            doc,
-            [
-              { label: 'ID', key: 'ref_no', width: 0.11 },
-              { label: 'Unit / Area', key: 'unit_name', width: 0.12 },
-              { label: 'Amenity / Item', key: 'item_name', width: 0.13 },
-              { label: 'Observation', key: 'observation', width: 0.3 },
-              { label: 'Sev.', key: 'severity_name', width: 0.07 },
-              { label: 'Action by', key: 'department_name', width: 0.1 },
-              { label: 'Supervisor', key: 'supervisor_name', width: 0.1 },
-              { label: 'TDC', key: 'tdc', width: 0.07 },
-            ],
-            observations
-          );
-
-          if (req.validQuery.photos) {
-            const withPhotos = observations
-              .map((o) => ({
-                observation: o,
-                photos: all(
-                  `SELECT * FROM attachments WHERE observation_id = ? AND kind = 'photo' ORDER BY id LIMIT 4`,
-                  [o.id]
-                ),
-              }))
-              .filter((x) => x.photos.length);
-            if (withPhotos.length) {
-              doc.addPage();
-              doc.font('Helvetica-Bold').fontSize(11).text('Photographic evidence');
-              doc.moveDown(0.4);
-              for (const entry of withPhotos) {
-                if (doc.y > doc.page.height - 200) doc.addPage();
-                doc
-                  .font('Helvetica-Bold')
-                  .fontSize(8.5)
-                  .text(`${entry.observation.ref_no} - ${entry.observation.item_name ?? ''} ${entry.observation.unit_name ? `(${entry.observation.unit_name})` : ''}`);
-                doc.font('Helvetica').fontSize(8).fillColor('#5a6b7b').text(entry.observation.observation, { width: 500 });
-                doc.fillColor('#0b2e4f').moveDown(0.2);
-                let x = 40;
-                const top = doc.y;
-                let maxBottom = top;
-                for (const photo of entry.photos) {
-                  const abs = attachmentPath(photo.stored_name);
-                  if (!abs) continue;
-                  try {
-                    doc.image(abs, x, top, { fit: [120, 90] });
-                    x += 128;
-                    maxBottom = Math.max(maxBottom, top + 90);
-                  } catch {
-                    /* unreadable image - skip */
-                  }
-                }
-                doc.y = maxBottom + 12;
-              }
-            }
-          }
-        }
-
-        if (approvals.length) {
-          if (doc.y > doc.page.height - 160) doc.addPage();
-          doc.moveDown(0.6);
-          doc.font('Helvetica-Bold').fontSize(9.5).text('Acknowledgement & signatures');
-          doc.moveDown(0.3);
-          for (const a of approvals) {
-            const top = doc.y;
-            if (a.signature_data?.startsWith('data:image')) {
-              try {
-                doc.image(Buffer.from(a.signature_data.split(',')[1], 'base64'), 40, top, { fit: [110, 40] });
-              } catch {
-                /* ignore malformed signature */
-              }
-            }
-            doc
-              .font('Helvetica')
-              .fontSize(8.5)
-              .text(
-                `${a.user_name}${a.designation ? `, ${a.designation}` : ''} (${a.approval_role}) - ${String(a.signed_at).slice(0, 19).replace('T', ' ')}${a.remarks ? ` - ${a.remarks}` : ''}`,
-                160,
-                top + 12,
-                { width: doc.page.width - 200 }
-              );
-            doc.y = Math.max(doc.y, top + 46);
-          }
-        }
-      }
-    );
+    const photos = req.validQuery.photos
+      ? report.observations
+          .map((o) => ({
+            observation: o,
+            photos: all(
+              `SELECT * FROM attachments WHERE observation_id = ? AND kind = 'photo' ORDER BY id LIMIT 4`,
+              [o.id]
+            ),
+          }))
+          .filter((x) => x.photos.length)
+      : [];
+    streamInspectionReportPdf(res, report, {
+      fileName: `${stem}.pdf`,
+      verifyUrl: verification.url,
+      photos,
+      attachmentPath,
+    });
   })
 );
 
@@ -711,6 +731,357 @@ async function respondWithTable(req, res, { title, subtitle, reportType, columns
     }
   );
 }
+
+/* ------------------- 9-10. the inspection-based reports ------------------- */
+
+/**
+ * These two are the reports that read the inspection as the unit of record.
+ *
+ * Everything above counts observations, which answers "what is wrong and who has
+ * to fix it". These answer the other half: what inspection work was done. One
+ * commercial inspector covers many areas in a visit, so the register has one row
+ * per visit - not per area - and the inspector-wise report sums those visits.
+ */
+
+const INSPECTION_COLUMNS = [
+  { key: 'inspection_no', label: 'Report No.', width: 24 },
+  { key: 'ref_no', label: 'Inspection ID', width: 18 },
+  { key: 'date', label: 'Date', width: 12 },
+  { key: 'time', label: 'Time', width: 14 },
+  { key: 'place', label: 'Location', width: 26 },
+  { key: 'scope', label: 'Scope', width: 10 },
+  { key: 'module_name', label: 'Module', width: 26 },
+  { key: 'inspection_type_name', label: 'Type', width: 26 },
+  { key: 'inspector_name', label: 'Inspecting officer', width: 28 },
+  { key: 'joint_with', label: 'Accompanied by', width: 28 },
+  { key: 'areas_on_sheet', label: 'Areas on sheet', width: 12 },
+  { key: 'areas_covered', label: 'Attended to', width: 11 },
+  { key: 'areas_satisfactory', label: 'In order', width: 10 },
+  { key: 'areas_with_deficiencies', label: 'With deficiencies', width: 14 },
+  { key: 'areas_not_inspected', label: 'Not inspected', width: 12 },
+  { key: 'coverage_pct', label: 'Coverage %', width: 11 },
+  { key: 'items_checked', label: 'Items checked', width: 12 },
+  { key: 'items_ok', label: 'Items in order', width: 12 },
+  { key: 'observation_count', label: 'Deficiencies', width: 12 },
+  { key: 'open_count', label: 'Open', width: 8 },
+  { key: 'overdue_count', label: 'Overdue', width: 9 },
+  { key: 'closed_count', label: 'Closed', width: 9 },
+  { key: 'previous_ref_no', label: 'Previous inspection', width: 18 },
+  { key: 'report_status', label: 'Report', width: 10 },
+  { key: 'status', label: 'Status', width: 12 },
+];
+
+const INSPECTOR_COLUMNS = [
+  { key: 'inspector_name', label: 'Inspecting officer', width: 30 },
+  { key: 'inspector_designation', label: 'Designation', width: 28 },
+  { key: 'inspections', label: 'Inspections', width: 11 },
+  { key: 'stations_covered', label: 'Locations', width: 10 },
+  { key: 'areas_covered', label: 'Areas attended to', width: 15 },
+  { key: 'areas_satisfactory', label: 'Areas in order', width: 13 },
+  { key: 'items_checked', label: 'Items checked', width: 12 },
+  { key: 'avg_coverage_pct', label: 'Avg coverage %', width: 13 },
+  { key: 'observations', label: 'Deficiencies raised', width: 16 },
+  { key: 'avg_observations', label: 'Per inspection', width: 13 },
+  { key: 'open', label: 'Open', width: 8 },
+  { key: 'overdue', label: 'Overdue', width: 9 },
+  { key: 'closed', label: 'Closed', width: 9 },
+  { key: 'closure_pct', label: 'Closure %', width: 10 },
+  { key: 'reports_issued', label: 'Reports issued', width: 12 },
+  { key: 'last_inspection', label: 'Last inspection', width: 13 },
+];
+
+/** Builds the WHERE clause for an inspection-based report. */
+function inspectionWhere(filters, user) {
+  const where = ['1=1'];
+  const params = [];
+  const eq = (col, value) => {
+    if (value === undefined || value === null) return;
+    where.push(`i.${col} = ?`);
+    params.push(value);
+  };
+  eq('module_id', filters.module_id);
+  eq('station_id', filters.station_id);
+  eq('inspector_id', filters.inspector_id);
+  if (filters.module_code) {
+    where.push('i.module_code = ?');
+    params.push(filters.module_code);
+  }
+  if (filters.division_id) {
+    where.push('i.station_id IN (SELECT id FROM stations WHERE division_id = ?)');
+    params.push(filters.division_id);
+  }
+  if (filters.scope) {
+    where.push('i.scope = ?');
+    params.push(filters.scope);
+  }
+  if (filters.status) {
+    const list = filters.status.split(',').map((x) => x.trim()).filter(Boolean);
+    where.push(`i.status IN (${list.map(() => '?').join(',')})`);
+    params.push(...list);
+  }
+  if (filters.mine) {
+    where.push('i.inspector_id = ?');
+    params.push(user.id);
+  }
+  const from = filters.from ?? (filters.days ? `-${filters.days} days` : null);
+  if (filters.days && !filters.from) {
+    where.push("date(COALESCE(i.started_at, i.created_at)) >= date('now', 'localtime', ?)");
+    params.push(from);
+  } else if (filters.from) {
+    where.push('date(COALESCE(i.started_at, i.created_at)) >= date(?)');
+    params.push(filters.from);
+  }
+  if (filters.to) {
+    where.push('date(COALESCE(i.started_at, i.created_at)) <= date(?)');
+    params.push(filters.to);
+  }
+  if (filters.q) {
+    const like = `%${filters.q.toLowerCase()}%`;
+    where.push(
+      `(lower(i.ref_no) LIKE ? OR lower(COALESCE(i.inspection_no,'')) LIKE ?
+        OR lower(COALESCE(i.title,'')) LIKE ? OR lower(COALESCE(i.station_name,'')) LIKE ?
+        OR lower(COALESCE(i.station_code,'')) LIKE ? OR lower(i.inspector_name) LIKE ?)`
+    );
+    params.push(like, like, like, like, like, like);
+  }
+  const scope = inspectionScopeClause(user, { table: 'i' });
+  if (scope.sql !== '1=1') {
+    where.push(scope.sql);
+    params.push(...scope.params);
+  }
+  return { sql: where.join(' AND '), params };
+}
+
+/** One row per inspection, with its coverage and its deficiency counters. */
+function fetchInspections(filters, user) {
+  const { sql, params } = inspectionWhere(filters, user);
+  return all(
+    `SELECT i.*,
+            (SELECT COUNT(*) FROM v_observations o
+              WHERE o.inspection_id = i.id AND o.is_overdue = 1) AS overdue_count
+       FROM v_inspections i WHERE ${sql}
+      ORDER BY COALESCE(i.started_at, i.created_at) DESC, i.id DESC LIMIT ?`,
+    [...params, filters.limit ?? 1000]
+  ).map((row) => ({
+    ...row,
+    date: String(row.started_at ?? row.created_at ?? '').slice(0, 10),
+    time: row.from_time ? `${row.from_time}${row.to_time ? `-${row.to_time}` : ''}` : '',
+    place:
+      row.station_name
+        ? `${row.station_name} (${row.station_code})`
+        : row.train_number
+          ? `${row.train_number} ${row.train_name ?? ''}`.trim()
+          : row.section ?? '-',
+  }));
+}
+
+const inspectionFilterSchema = filterSchema.extend({
+  inspector_id: optionalId,
+  scope: z.enum(['station', 'train', 'section']).optional(),
+});
+
+/**
+ * The inspection register: what inspection work was done, one row per visit. This
+ * is the report the division reads to see whether the inspections are happening,
+ * which no observation-wise report can answer.
+ */
+router.get(
+  '/inspection-register',
+  query(inspectionFilterSchema),
+  asyncRoute(async (req, res) => {
+    const rows = fetchInspections(req.validQuery, req.user);
+    const totals = registerTotals(rows);
+    await deliverInspections(req, res, {
+      rows,
+      totals,
+      columns: INSPECTION_COLUMNS,
+      key: 'inspection-register',
+      title: 'Inspection Register',
+      subtitle: 'One row per inspection: the areas attended to, the items checked and the deficiencies raised',
+      sheetName: 'Inspections',
+    });
+  })
+);
+
+/** Totals for the register, which are per-inspection sums rather than averages. */
+function registerTotals(rows) {
+  const sum = (key) => rows.reduce((n, r) => n + (Number(r[key]) || 0), 0);
+  const covered = sum('areas_covered');
+  const onSheet = sum('areas_on_sheet') - sum('areas_not_available');
+  return [
+    { metric: 'Inspections', value: rows.length },
+    { metric: 'Locations inspected', value: new Set(rows.map((r) => r.place)).size },
+    { metric: 'Inspecting officers', value: new Set(rows.map((r) => r.inspector_name)).size },
+    { metric: 'Areas attended to', value: covered },
+    { metric: 'Areas found in order', value: sum('areas_satisfactory') },
+    { metric: 'Areas with deficiencies', value: sum('areas_with_deficiencies') },
+    { metric: 'Areas not inspected', value: sum('areas_not_inspected') },
+    { metric: 'Average coverage', value: onSheet ? `${Math.round((covered / onSheet) * 100)}%` : '-' },
+    { metric: 'Items checked', value: sum('items_checked') },
+    { metric: 'Items found in order', value: sum('items_ok') },
+    { metric: 'Deficiencies raised', value: sum('observation_count') },
+    {
+      metric: 'Deficiencies per inspection',
+      value: rows.length ? (sum('observation_count') / rows.length).toFixed(1) : '-',
+    },
+    { metric: 'Still open', value: sum('open_count') },
+    { metric: 'Overdue', value: sum('overdue_count') },
+    { metric: 'Reports issued', value: rows.filter((r) => r.report_status === 'issued').length },
+  ];
+}
+
+/**
+ * Inspector-wise: the same inspections summed by the officer who carried them out,
+ * so the division can see who is inspecting, how much of each station they cover,
+ * and whether what they raise gets closed.
+ */
+router.get(
+  '/inspector-wise',
+  query(inspectionFilterSchema),
+  asyncRoute(async (req, res) => {
+    const inspections = fetchInspections({ ...req.validQuery, limit: 5000 }, req.user);
+    const by = new Map();
+    for (const i of inspections) {
+      const key = i.inspector_id;
+      if (!by.has(key)) {
+        by.set(key, {
+          inspector_id: key,
+          inspector_name: i.inspector_name,
+          inspector_designation: i.inspector_designation ?? '',
+          inspections: 0,
+          locations: new Set(),
+          areas_on_sheet: 0,
+          areas_available: 0,
+          areas_covered: 0,
+          areas_satisfactory: 0,
+          items_checked: 0,
+          observations: 0,
+          open: 0,
+          overdue: 0,
+          closed: 0,
+          reports_issued: 0,
+          last_inspection: '',
+        });
+      }
+      const row = by.get(key);
+      row.inspections += 1;
+      row.locations.add(i.place);
+      row.areas_on_sheet += i.areas_on_sheet ?? 0;
+      row.areas_available += (i.areas_on_sheet ?? 0) - (i.areas_not_available ?? 0);
+      row.areas_covered += i.areas_covered ?? 0;
+      row.areas_satisfactory += i.areas_satisfactory ?? 0;
+      row.items_checked += i.items_checked ?? 0;
+      row.observations += i.observation_count ?? 0;
+      row.open += i.open_count ?? 0;
+      row.overdue += i.overdue_count ?? 0;
+      row.closed += i.closed_count ?? 0;
+      if (i.report_status === 'issued') row.reports_issued += 1;
+      if (i.date > row.last_inspection) row.last_inspection = i.date;
+    }
+    const rows = [...by.values()]
+      .map((r) => ({
+        ...r,
+        stations_covered: r.locations.size,
+        avg_coverage_pct: r.areas_available ? Math.round((r.areas_covered / r.areas_available) * 100) : null,
+        avg_observations: r.inspections ? Number((r.observations / r.inspections).toFixed(1)) : 0,
+        closure_pct: r.observations ? Math.round((r.closed / r.observations) * 100) : null,
+      }))
+      .sort((a, b) => b.inspections - a.inspections || b.areas_covered - a.areas_covered);
+
+    await deliverInspections(req, res, {
+      rows,
+      totals: [
+        { metric: 'Inspecting officers', value: rows.length },
+        { metric: 'Inspections', value: inspections.length },
+        { metric: 'Areas attended to', value: rows.reduce((n, r) => n + r.areas_covered, 0) },
+        { metric: 'Items checked', value: rows.reduce((n, r) => n + r.items_checked, 0) },
+        { metric: 'Deficiencies raised', value: rows.reduce((n, r) => n + r.observations, 0) },
+        {
+          metric: 'Inspections per officer',
+          value: rows.length ? (inspections.length / rows.length).toFixed(1) : '-',
+        },
+      ],
+      columns: INSPECTOR_COLUMNS,
+      key: 'inspector-wise',
+      title: 'Inspector-wise Report',
+      subtitle: 'Inspection work by the officer who carried it out',
+      sheetName: 'Inspectors',
+    });
+  })
+);
+
+/** Renders an inspection-based report in whichever format was asked for. */
+async function deliverInspections(req, res, { rows, totals, columns, key, title, subtitle, sheetName }) {
+  const { format } = req.validQuery;
+  if (format === 'json') {
+    res.json({ data: rows, summary: totals, count: rows.length });
+    return;
+  }
+  if (format === 'csv') {
+    download(res, { fileName: `${key}.csv`, contentType: 'text/csv; charset=utf-8' });
+    res.send(toCsv(rows, columns));
+    return;
+  }
+  if (format === 'xlsx') {
+    const buffer = await toXlsx([
+      { name: sheetName, title, subtitle, columns, rows },
+      {
+        name: 'Summary',
+        title: `${title} - summary`,
+        columns: [
+          { key: 'metric', label: 'Metric', width: 34 },
+          { key: 'value', label: 'Value', width: 16 },
+        ],
+        rows: totals,
+      },
+    ]);
+    download(res, {
+      fileName: `${key}.xlsx`,
+      contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    });
+    res.send(buffer);
+    return;
+  }
+  const verification = reportToken(req, { reportType: key, params: req.validQuery });
+  // The PDF carries the columns a reader can take in; the full set is in the
+  // spreadsheet, which is what a wide table is for.
+  const printed = columns.filter((c) => !PDF_SKIP[key]?.includes(c.key));
+  const share = 1 / printed.length;
+  streamPdf(
+    res,
+    {
+      fileName: `${key}.pdf`,
+      title,
+      subtitle,
+      meta: [
+        { label: 'Generated', value: new Date().toISOString().slice(0, 19).replace('T', ' ') },
+        { label: 'Rows', value: rows.length },
+      ],
+      verifyUrl: verification.url,
+    },
+    (doc, helpers) => {
+      helpers.table(
+        doc,
+        printed.map((c) => ({ label: c.label, key: c.key, width: share })),
+        rows,
+        { fontSize: 7 }
+      );
+      doc.moveDown(0.3);
+      doc.font('Helvetica-Bold').fontSize(9).text('Summary');
+      doc.font('Helvetica').fontSize(8.5);
+      for (const row of totals) doc.text(`${row.metric}: ${row.value}`);
+    }
+  );
+}
+
+/** Columns left out of the PDF, which has to stay readable on one page width. */
+const PDF_SKIP = {
+  'inspection-register': [
+    'ref_no', 'scope', 'joint_with', 'items_ok', 'areas_not_inspected',
+    'previous_ref_no', 'status', 'module_name',
+  ],
+  'inspector-wise': ['inspector_designation', 'areas_satisfactory', 'reports_issued'],
+};
 
 /* --------------------------- raw observation export ---------------------- */
 

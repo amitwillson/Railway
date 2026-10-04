@@ -361,6 +361,11 @@ CREATE TABLE IF NOT EXISTS item_groups (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
   module_id   INTEGER NOT NULL REFERENCES modules(id) ON DELETE CASCADE,
   name        TEXT NOT NULL,
+  -- Comma-separated unit kinds this group belongs to, e.g. 'booking office,
+  -- reservation office'. NULL or empty means the group applies in every area.
+  -- The inspection sheet reads it so that a platform is not offered the
+  -- booking-office checks; it is master data, editable from the admin panel.
+  applies_to_kinds TEXT,
   sort_order  INTEGER NOT NULL DEFAULT 100,
   active      INTEGER NOT NULL DEFAULT 1,
   UNIQUE (module_id, name)
@@ -532,25 +537,44 @@ CREATE TABLE IF NOT EXISTS settings (
 -- 6. Inspections and observations
 -- ---------------------------------------------------------------------------
 
+-- An inspection is one visit by one inspecting officer, covering as many areas
+-- of the station (or coaches of the train) as that officer attends to. It is the
+-- unit of record: the areas covered live in inspection_areas, the item-by-item
+-- result in inspection_item_results, and the deficiencies in observations. The
+-- areas are part of the inspection, never the other way round, which is why
+-- `scope` says station / train / section and never names an area. `location_type`
+-- is kept because earlier records carry it and the admin filters read it, but it
+-- no longer decides what an inspection is.
 CREATE TABLE IF NOT EXISTS inspections (
   id                 INTEGER PRIMARY KEY AUTOINCREMENT,
   ref_no             TEXT NOT NULL UNIQUE,
+  inspection_no      TEXT,             -- office running number, FY series
   module_id          INTEGER NOT NULL REFERENCES modules(id),
   inspection_type_id INTEGER NOT NULL REFERENCES inspection_types(id),
+  scope              TEXT NOT NULL DEFAULT 'station'
+                     CHECK (scope IN ('station','train','section')),
   location_type      TEXT NOT NULL,
   station_id         INTEGER REFERENCES stations(id),
   train_id           INTEGER REFERENCES trains(id),
   section            TEXT,
   title              TEXT,
   inspector_id       INTEGER NOT NULL REFERENCES users(id),
-  joint_with         TEXT,
+  joint_with         TEXT,             -- officers and staff who accompanied
   planned_date       TEXT,
   started_at         TEXT,
   completed_at       TEXT,
+  from_time          TEXT,             -- HH:MM, the clock time of the visit
+  to_time            TEXT,
+  previous_inspection_id INTEGER REFERENCES inspections(id),
   status             TEXT NOT NULL DEFAULT 'in_progress'
                      CHECK (status IN ('planned','in_progress','completed','cancelled')),
+  report_status      TEXT NOT NULL DEFAULT 'draft'
+                     CHECK (report_status IN ('draft','issued')),
+  report_issued_at   TEXT,
+  report_issued_by   INTEGER REFERENCES users(id),
   summary            TEXT,
   auto_summary       TEXT,
+  general_remarks    TEXT,             -- good work noticed, staff alertness, etc.
   notes              TEXT,
   latitude           REAL,
   longitude          REAL,
@@ -564,11 +588,80 @@ CREATE INDEX IF NOT EXISTS idx_insp_train ON inspections(train_id);
 CREATE INDEX IF NOT EXISTS idx_insp_inspector ON inspections(inspector_id);
 CREATE INDEX IF NOT EXISTS idx_insp_module ON inspections(module_id);
 CREATE INDEX IF NOT EXISTS idx_insp_created ON inspections(created_at);
+CREATE INDEX IF NOT EXISTS idx_insp_previous ON inspections(previous_inspection_id);
+
+-- The areas this inspection attended to. One row per area, created when the
+-- inspector opens the inspection sheet, so the record distinguishes an area
+-- found satisfactory from one never looked at - which is the difference between
+-- an inspection report and a list of complaints.
+--   satisfactory   checked, nothing to report
+--   deficiencies   checked, one or more observations raised (set automatically)
+--   not_inspected  on the sheet, not attended to on this visit
+--   not_available  the area does not exist / was closed at the time
+CREATE TABLE IF NOT EXISTS inspection_areas (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  inspection_id INTEGER NOT NULL REFERENCES inspections(id) ON DELETE CASCADE,
+  unit_id       INTEGER REFERENCES units(id),
+  unit_name     TEXT NOT NULL,          -- snapshot, so a renamed unit cannot rewrite history
+  unit_kind     TEXT,
+  coach         TEXT,                   -- for a train inspection
+  result        TEXT NOT NULL DEFAULT 'not_inspected'
+                CHECK (result IN ('satisfactory','deficiencies','not_inspected','not_available')),
+  remarks       TEXT,
+  sort_order    INTEGER NOT NULL DEFAULT 100,
+  inspected_at  TEXT,
+  created_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  updated_at    TEXT,
+  UNIQUE (inspection_id, unit_id, coach)
+);
+CREATE INDEX IF NOT EXISTS idx_insp_areas_inspection ON inspection_areas(inspection_id);
+CREATE INDEX IF NOT EXISTS idx_insp_areas_unit ON inspection_areas(unit_id);
+
+-- Item-by-item result inside an area. This is what lets the report print
+-- "Drinking Water - checked, in order" beside "Water Cooler - deficient, see
+-- OBS/2026/0043", instead of silently omitting everything that was found right.
+CREATE TABLE IF NOT EXISTS inspection_item_results (
+  id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+  inspection_id      INTEGER NOT NULL REFERENCES inspections(id) ON DELETE CASCADE,
+  inspection_area_id INTEGER REFERENCES inspection_areas(id) ON DELETE CASCADE,
+  unit_id            INTEGER REFERENCES units(id),
+  item_id            INTEGER REFERENCES inspection_items(id),
+  item_name          TEXT NOT NULL,     -- snapshot
+  group_name         TEXT,
+  result             TEXT NOT NULL DEFAULT 'ok'
+                     CHECK (result IN ('ok','deficient','not_applicable')),
+  parameters         TEXT,              -- JSON [{parameter_id,name,value}]
+  remarks            TEXT,
+  observation_id     INTEGER REFERENCES observations(id) ON DELETE SET NULL,
+  recorded_at        TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  UNIQUE (inspection_id, inspection_area_id, item_id)
+);
+CREATE INDEX IF NOT EXISTS idx_insp_items_inspection ON inspection_item_results(inspection_id);
+CREATE INDEX IF NOT EXISTS idx_insp_items_area ON inspection_item_results(inspection_area_id);
+CREATE INDEX IF NOT EXISTS idx_insp_items_obs ON inspection_item_results(observation_id);
+
+-- Review of the previous inspection's outstanding observations, which is how
+-- every real inspection opens. The finding is recorded here and mirrored onto
+-- the observation's own timeline; it never edits the observation's wording.
+CREATE TABLE IF NOT EXISTS inspection_previous_reviews (
+  id             INTEGER PRIMARY KEY AUTOINCREMENT,
+  inspection_id  INTEGER NOT NULL REFERENCES inspections(id) ON DELETE CASCADE,
+  observation_id INTEGER NOT NULL REFERENCES observations(id) ON DELETE CASCADE,
+  finding        TEXT NOT NULL
+                 CHECK (finding IN ('complied','partially_complied','not_complied','dropped')),
+  remarks        TEXT,
+  reviewed_by    INTEGER REFERENCES users(id),
+  reviewed_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  UNIQUE (inspection_id, observation_id)
+);
+CREATE INDEX IF NOT EXISTS idx_insp_prev_inspection ON inspection_previous_reviews(inspection_id);
+CREATE INDEX IF NOT EXISTS idx_insp_prev_obs ON inspection_previous_reviews(observation_id);
 
 CREATE TABLE IF NOT EXISTS observations (
   id                    INTEGER PRIMARY KEY AUTOINCREMENT,
   ref_no                TEXT NOT NULL UNIQUE,
   inspection_id         INTEGER NOT NULL REFERENCES inspections(id) ON DELETE CASCADE,
+  inspection_area_id    INTEGER REFERENCES inspection_areas(id) ON DELETE SET NULL,
   module_id             INTEGER NOT NULL REFERENCES modules(id),
   station_id            INTEGER REFERENCES stations(id),
   train_id              INTEGER REFERENCES trains(id),
@@ -884,11 +977,46 @@ SELECT
   (SELECT COUNT(*) FROM observations o WHERE o.inspection_id = i.id
      AND o.status = 'closed') AS closed_count,
   (SELECT COUNT(*) FROM observations o JOIN severities sv ON sv.id = o.severity_id
-     WHERE o.inspection_id = i.id AND sv.rank = 1) AS critical_count
+     WHERE o.inspection_id = i.id AND sv.rank = 1) AS critical_count,
+  -- Coverage. An inspection is one visit over many areas, so how much of the
+  -- station was attended to is a property of the inspection and belongs here,
+  -- where every inspection-based report and dashboard reads it for free.
+  (SELECT COUNT(*) FROM inspection_areas a WHERE a.inspection_id = i.id) AS areas_on_sheet,
+  (SELECT COUNT(*) FROM inspection_areas a WHERE a.inspection_id = i.id
+     AND a.result IN ('satisfactory','deficiencies')) AS areas_covered,
+  (SELECT COUNT(*) FROM inspection_areas a WHERE a.inspection_id = i.id
+     AND a.result = 'satisfactory') AS areas_satisfactory,
+  (SELECT COUNT(*) FROM inspection_areas a WHERE a.inspection_id = i.id
+     AND a.result = 'deficiencies') AS areas_with_deficiencies,
+  (SELECT COUNT(*) FROM inspection_areas a WHERE a.inspection_id = i.id
+     AND a.result = 'not_inspected') AS areas_not_inspected,
+  (SELECT COUNT(*) FROM inspection_areas a WHERE a.inspection_id = i.id
+     AND a.result = 'not_available') AS areas_not_available,
+  CASE WHEN (SELECT COUNT(*) FROM inspection_areas a WHERE a.inspection_id = i.id
+               AND a.result <> 'not_available') = 0 THEN NULL
+       ELSE CAST(ROUND(
+         100.0 * (SELECT COUNT(*) FROM inspection_areas a WHERE a.inspection_id = i.id
+                    AND a.result IN ('satisfactory','deficiencies'))
+         / (SELECT COUNT(*) FROM inspection_areas a WHERE a.inspection_id = i.id
+              AND a.result <> 'not_available')) AS INTEGER)
+  END AS coverage_pct,
+  (SELECT COUNT(*) FROM inspection_item_results r WHERE r.inspection_id = i.id) AS items_checked,
+  (SELECT COUNT(*) FROM inspection_item_results r WHERE r.inspection_id = i.id
+     AND r.result = 'ok') AS items_ok,
+  (SELECT COUNT(*) FROM inspection_item_results r WHERE r.inspection_id = i.id
+     AND r.result = 'deficient') AS items_deficient,
+  (SELECT COUNT(*) FROM inspection_previous_reviews pr WHERE pr.inspection_id = i.id) AS previous_reviewed,
+  (SELECT COUNT(*) FROM inspection_previous_reviews pr WHERE pr.inspection_id = i.id
+     AND pr.finding = 'complied') AS previous_complied,
+  (SELECT COUNT(*) FROM inspection_previous_reviews pr WHERE pr.inspection_id = i.id
+     AND pr.finding IN ('not_complied','partially_complied')) AS previous_outstanding,
+  prev.ref_no AS previous_ref_no,
+  prev.started_at AS previous_started_at
 FROM inspections i
 JOIN modules m ON m.id = i.module_id
 JOIN inspection_types it ON it.id = i.inspection_type_id
 JOIN users u ON u.id = i.inspector_id
 LEFT JOIN stations s ON s.id = i.station_id
 LEFT JOIN divisions d ON d.id = s.division_id
-LEFT JOIN trains t ON t.id = i.train_id;
+LEFT JOIN trains t ON t.id = i.train_id
+LEFT JOIN inspections prev ON prev.id = i.previous_inspection_id;

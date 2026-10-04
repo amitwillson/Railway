@@ -17,6 +17,10 @@ import { hashPassword } from '../lib/auth.js';
 import { nextRef, randomToken, uuid } from '../lib/ids.js';
 import { dispatch } from '../lib/notify.js';
 import {
+  itemsForArea, linkPreviousInspection, markAreaDeficient, openSheet, recordItemResults,
+} from '../lib/inspectionSheet.js';
+import { issueReport } from '../lib/inspectionReport.js';
+import {
   departments, trains, stationUnits, trainUnits,
   extraStationUnits, modules, inspectionTypes, itemParameters, observationCategories,
   severities, tdcRules, escalationLevels, notificationRules, settings, ruleReferences,
@@ -136,8 +140,9 @@ function resetDatabase() {
   const db = getDb();
   const tables = [
     'reminder_log', 'notification_deliveries', 'notifications', 'report_tokens',
-    'approvals', 'observation_events', 'attachments', 'compliances', 'observations',
-    'inspections', 'item_parameter_map', 'inspection_items', 'item_groups',
+    'approvals', 'observation_events', 'attachments', 'compliances',
+    'inspection_previous_reviews', 'inspection_item_results', 'observations',
+    'inspection_areas', 'inspections', 'item_parameter_map', 'inspection_items', 'item_groups',
     'station_amenity_norms', 'station_facilities',
     'supervisor_coverage', 'supervisor_stations', 'supervisor_departments',
     'inspection_note_observations', 'inspection_notes', 'item_deficiencies',
@@ -299,6 +304,9 @@ function seedCatalogue(ref) {
       const groupId = upsert('item_groups', ['module_id', 'name'], {
         module_id: moduleId,
         name: group.group,
+        // Which areas this group belongs to, so the inspection sheet offers the
+        // ticketing checks in the booking office and not on a platform.
+        applies_to_kinds: group.kinds ?? null,
         sort_order: (groupIndex + 1) * 10,
       });
       groupIds.set(`${moduleCode}|${group.group}`, groupId);
@@ -696,6 +704,12 @@ const demoInspections = [
     days_ago: 0,
     status: 'in_progress',
     title: 'Passenger amenities inspection - Bilaspur',
+    scope: 'station',
+    from_time: '10:15',
+    to_time: '13:40',
+    joint_with: 'Station Manager / Bilaspur and SSE (Works) / Bilaspur',
+    covered: ['Platform No. 1', 'Platform No. 2', 'Platform No. 3', 'Platform No. 4', 'Platform No. 5', 'Platform No. 6', 'Platform No. 7', 'Platform No. 8', 'Booking Hall', 'Reservation Hall', 'Concourse', 'Waiting Hall', 'Circulating Area', 'FOB', 'Station Entrance', 'Station Exit', 'Parcel Office', 'Catering Area', 'Food Plaza', 'Parking Area', 'Pay & Use Toilet', 'Retiring Room', 'Cloak Room', 'Divyangjan Facilitation Counter', 'Second Entry Circulating Area'],
+    not_available: ['Subway'],
     observations: [
       {
         unit: 'Platform No. 2',
@@ -758,6 +772,10 @@ const demoInspections = [
     days_ago: 34,
     status: 'completed',
     title: 'Routine amenities inspection - Bilaspur',
+    scope: 'station',
+    from_time: '09:30',
+    to_time: '12:00',
+    covered: ['Platform No. 1', 'Platform No. 2', 'Platform No. 3', 'Platform No. 4', 'Booking Hall', 'Waiting Hall', 'Circulating Area', 'Retiring Room', 'Cloak Room'],
     observations: [
       {
         unit: 'Platform No. 2',
@@ -806,6 +824,10 @@ const demoInspections = [
     days_ago: 74,
     status: 'completed',
     title: 'Surprise inspection of platform amenities - Bilaspur',
+    scope: 'station',
+    from_time: '21:10',
+    to_time: '22:45',
+    covered: ['Platform No. 1', 'Platform No. 2', 'Platform No. 3', 'Platform No. 4', 'Platform No. 5', 'Platform No. 6'],
     observations: [
       {
         unit: 'Platform No. 2',
@@ -856,6 +878,11 @@ const demoInspections = [
     days_ago: 9,
     status: 'completed',
     title: 'Commercial inspection - Bilaspur',
+    scope: 'station',
+    from_time: '10:00',
+    to_time: '14:20',
+    joint_with: 'Chief Booking Supervisor / Bilaspur',
+    covered: ['Booking Hall', 'Reservation Hall', 'Parcel Office', 'Catering Area', 'Food Plaza', 'Concourse'],
     observations: [
       {
         unit: 'Catering Area',
@@ -932,6 +959,10 @@ const demoInspections = [
     days_ago: 4,
     status: 'completed',
     title: 'Safe running (commercial) inspection - Bilaspur platforms',
+    scope: 'station',
+    from_time: '17:40',
+    to_time: '19:30',
+    covered: ['Platform No. 1', 'Platform No. 2', 'Platform No. 3', 'Platform No. 4', 'FOB', 'Station Entrance'],
     observations: [
       {
         unit: 'Platform No. 3',
@@ -988,6 +1019,10 @@ const demoInspections = [
     days_ago: 2,
     status: 'completed',
     title: 'On-train commercial inspection - 12189 Mahakaushal Express',
+    scope: 'train',
+    from_time: '06:20',
+    to_time: '09:05',
+    covered: ['Coach', 'Reserved Coach', 'Unreserved Coach', 'Pantry Car', 'Coach Toilet', 'Door Area'],
     observations: [
       {
         unit: 'Gangway',
@@ -1042,6 +1077,11 @@ const demoInspections = [
     days_ago: 19,
     status: 'completed',
     title: 'Station inspection - Raigarh',
+    scope: 'station',
+    from_time: '11:00',
+    to_time: '15:15',
+    joint_with: 'Station Manager / Raigarh',
+    covered: ['Platform No. 1', 'Platform No. 2', 'Platform No. 3', 'Booking Hall', 'Waiting Hall', 'Circulating Area', 'Food Plaza', 'Pay & Use Toilet'],
     observations: [
       {
         unit: 'Platform No. 2',
@@ -1096,6 +1136,10 @@ const demoInspections = [
     days_ago: 44,
     status: 'completed',
     title: 'Parcel office inspection - Champa',
+    scope: 'station',
+    from_time: '12:30',
+    to_time: '14:00',
+    covered: ['Parcel Office', 'Booking Hall', 'Platform No. 1'],
     observations: [
       {
         unit: 'Parcel Office',
@@ -1558,6 +1602,76 @@ function resolveSupervisor({ stationId, unitId, departmentId, itemId }) {
   return scored[0].id;
 }
 
+/**
+ * Builds one inspection's sheet: every area of the place goes on it, the areas the
+ * spec says were attended to get their item results, and the rest stay at "not
+ * inspected" - which is exactly the distinction the report needs to make.
+ */
+function seedInspectionSheet({ inspectionId, spec, baseDate }) {
+  openSheet(inspectionId);
+  const inspection = get('SELECT * FROM v_inspections i WHERE i.id = ?', [inspectionId]);
+  const areas = all('SELECT * FROM inspection_areas WHERE inspection_id = ? ORDER BY sort_order, id', [
+    inspectionId,
+  ]);
+
+  // An observation recorded in an area makes that area deficient, and records the
+  // item it was about as deficient too - the same two writes the live service does.
+  for (const observation of all(
+    'SELECT * FROM observations WHERE inspection_id = ? ORDER BY id',
+    [inspectionId]
+  )) {
+    const areaId = markAreaDeficient(observation);
+    if (areaId && observation.item_id) {
+      recordItemResults(inspectionId, areaId, [
+        { item_id: observation.item_id, result: 'deficient', observation_id: observation.id },
+      ]);
+    }
+  }
+
+  const covered = new Set(spec.covered ?? []);
+  const absent = new Set(spec.not_available ?? []);
+  for (const area of areas) {
+    if (absent.has(area.unit_name)) {
+      update('inspection_areas', area.id, {
+        result: 'not_available',
+        remarks: 'Not available at this station',
+        updated_at: baseDate,
+      });
+      continue;
+    }
+    if (!covered.has(area.unit_name)) continue;   // left at not_inspected
+    // One item from each group that applies in this area, rather than the first
+    // four of a flat list - otherwise every area of the station would record the
+    // same four water items and the report would read as though nothing else was
+    // ever looked at.
+    const already = all('SELECT item_id FROM inspection_item_results WHERE inspection_area_id = ?', [
+      area.id,
+    ]).map((r) => r.item_id);
+    const groups = itemsForArea(inspection, area);
+    const items = [];
+    for (let round = 0; round < 3 && items.length < 6; round += 1) {
+      for (const group of groups) {
+        const pick = group.items[round];
+        if (!pick || already.includes(pick.id) || items.some((i) => i.id === pick.id)) continue;
+        items.push(pick);
+        if (items.length >= 6) break;
+      }
+    }
+    if (items.length) {
+      recordItemResults(inspectionId, area.id, items.map((i) => ({ item_id: i.id, result: 'ok' })));
+    } else if (area.result === 'not_inspected') {
+      update('inspection_areas', area.id, { result: 'satisfactory', inspected_at: baseDate, updated_at: baseDate });
+    }
+  }
+
+  // The sheet was written now; the inspection happened on its own date.
+  run('UPDATE inspection_areas SET inspected_at = ?, updated_at = ? WHERE inspection_id = ? AND inspected_at IS NOT NULL', [
+    baseDate, baseDate, inspectionId,
+  ]);
+  run('UPDATE inspection_item_results SET recorded_at = ? WHERE inspection_id = ?', [baseDate, inspectionId]);
+  linkPreviousInspection(inspectionId);
+}
+
 async function seedDemo(ref, itemIds, ids) {
   let observationCount = 0;
   for (const spec of demoInspections) {
@@ -1567,6 +1681,10 @@ async function seedDemo(ref, itemIds, ids) {
       module_id: ref.moduleIds.get(spec.module),
       inspection_type_id: ref.typeIds.get(spec.type),
       location_type: spec.location_type,
+      scope: spec.scope ?? (spec.train ? 'train' : 'station'),
+      from_time: spec.from_time ?? null,
+      to_time: spec.to_time ?? null,
+      joint_with: spec.joint_with ?? null,
       station_id: spec.station ? ref.stationIds.get(spec.station) : null,
       train_id: spec.train ? ref.trainIds.get(spec.train) : null,
       title: spec.title,
@@ -1594,6 +1712,11 @@ async function seedDemo(ref, itemIds, ids) {
       observationCount += 1;
     }
 
+    // The sheet - which areas this visit attended to, and what was found in each.
+    // It is built after the observations so that an area carrying a deficiency is
+    // already marked by the time the satisfactory areas are filled in.
+    seedInspectionSheet({ inspectionId, spec, baseDate });
+
     if (spec.status === 'completed') {
       const { buildAutoSummary } = await import('../routes/inspections.js');
       const auto = buildAutoSummary(inspectionId);
@@ -1608,6 +1731,58 @@ async function seedDemo(ref, itemIds, ids) {
         signed_at: addDaysToIso(baseDate, 0, 13, 45),
       });
     }
+  }
+
+  // The predecessor of an inspection is the last one at that place, which is only
+  // knowable once every demo inspection exists - so the links are made in a second
+  // pass rather than as each one is seeded.
+  run('UPDATE inspections SET previous_inspection_id = NULL');
+  for (const row of all('SELECT id FROM inspections ORDER BY COALESCE(started_at, created_at), id')) {
+    linkPreviousInspection(row.id);
+  }
+
+  // A completed inspection has a report, and a report has an office number.
+  for (const row of all(
+    "SELECT id FROM inspections WHERE status = 'completed' ORDER BY COALESCE(started_at, created_at), id"
+  )) {
+    const inspection = get('SELECT * FROM inspections WHERE id = ?', [row.id]);
+    const issuedAt = inspection.completed_at ?? inspection.started_at;
+    issueReport(row.id, inspection.inspector_id);
+    update('inspections', row.id, { report_issued_at: issuedAt, updated_at: issuedAt });
+  }
+
+  // Part I of a report is the review of what the previous inspection of that place
+  // left outstanding. The inspection still in progress carries that review, which
+  // is where the demonstration shows it.
+  const live = get(
+    "SELECT * FROM inspections WHERE status = 'in_progress' AND previous_inspection_id IS NOT NULL ORDER BY id LIMIT 1"
+  );
+  let reviewCount = 0;
+  if (live) {
+    const outstanding = all(
+      `SELECT o.* FROM v_observations o
+        WHERE o.inspection_id = ? AND o.status NOT IN ('closed','cancelled')
+        ORDER BY o.severity_rank, o.id`,
+      [live.previous_inspection_id]
+    );
+    const findings = [
+      ['complied', 'Attended to. Found in order at the time of this inspection.'],
+      ['not_complied', 'Position unchanged. The deficiency persists and is carried forward.'],
+      ['partially_complied', 'Partly attended to. The balance work is still pending.'],
+    ];
+    outstanding.forEach((observation, index) => {
+      const [finding, remarks] = findings[index % findings.length];
+      insert('inspection_previous_reviews', {
+        inspection_id: live.id,
+        observation_id: observation.id,
+        finding,
+        remarks,
+        reviewed_by: live.inspector_id,
+        reviewed_at: live.started_at,
+      });
+      reviewCount += 1;
+    });
+    if (reviewCount) log(`  previous-inspection review: ${reviewCount} item(s) reviewed during ${live.ref_no}`);
   }
 
   // Recompute repeated-deficiency counters exactly as the live engine does.

@@ -4,6 +4,7 @@ import { badRequest, forbidden } from '../lib/errors.js';
 import { observationById } from '../lib/queries.js';
 import { autoAssign } from '../lib/assignment.js';
 import { findRepeats } from '../lib/repeats.js';
+import { markAreaDeficient, recordItemResults } from '../lib/inspectionSheet.js';
 import { deficiencyFor } from '../lib/deficiencies.js';
 import { dispatch } from '../lib/notify.js';
 import { tdcRuleFor } from '../lib/scheduler.js';
@@ -111,6 +112,7 @@ export async function createObservation({ payload, user, req = null }) {
     const id = insert('observations', {
       ref_no: nextRef('observations', 'OBS'),
       inspection_id: inspection.id,
+      inspection_area_id: payload.inspection_area_id ?? null,
       module_id: inspection.module_id,
       station_id: inspection.station_id ?? null,
       train_id: inspection.train_id ?? null,
@@ -165,6 +167,26 @@ export async function createObservation({ payload, user, req = null }) {
   });
 
   const created = observationById(createdId);
+
+  // The inspection sheet is the spine of the record, so a deficiency recorded in
+  // an area marks that area and that item without the inspector saying it twice.
+  const areaId = markAreaDeficient(created);
+  if (areaId && payload.item_id) {
+    recordItemResults(
+      inspection.id,
+      areaId,
+      [
+        {
+          item_id: payload.item_id,
+          result: 'deficient',
+          parameters: payload.parameters ?? null,
+          observation_id: createdId,
+        },
+      ],
+      user.id
+    );
+  }
+
   audit(req ?? { user }, {
     action: 'OBSERVATION_CREATE',
     entityType: 'observation',

@@ -10,6 +10,7 @@ import { autoAssign } from '../lib/assignment.js';
 import { findRepeats } from '../lib/repeats.js';
 import { dispatch } from '../lib/notify.js';
 import { createObservation, timeline } from '../services/observationService.js';
+import { refreshAreaResult } from '../lib/inspectionSheet.js';
 import { upload, kindForMime, removeStoredFile } from '../middleware/uploads.js';
 
 const router = express.Router();
@@ -143,6 +144,7 @@ router.get(
 
 const createSchema = z.object({
   inspection_id: z.coerce.number().int().positive(),
+  inspection_area_id: optionalId,
   unit_id: optionalId,
   unit_name: optionalText,
   item_id: optionalId,
@@ -534,6 +536,9 @@ router.post(
       actor: req.user,
       remarks: req.body.reason,
     });
+    // The sheet must not keep reading "deficiencies" for a deficiency that has
+    // been cancelled, so the area is re-evaluated from what is left in it.
+    if (before.inspection_area_id) refreshAreaResult(before.inspection_area_id);
     audit(req, {
       action: 'OBSERVATION_CANCEL',
       entityType: 'observation',

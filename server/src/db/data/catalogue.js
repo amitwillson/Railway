@@ -10,6 +10,10 @@
  *   category - observation category pre-selected
  *   severity - severity pre-selected
  *   applies  - station | train | both  (controls where the item is offered)
+ *   kinds    - the areas this group belongs to, as unit kinds. Omitted means the
+ *              group applies in every area, which is right for the station-wide
+ *              groups; naming kinds is what stops the inspection sheet offering
+ *              the booking-office checks on a platform.
  */
 
 /* ========================================================================== */
@@ -53,6 +57,7 @@ export const passengerAmenities = [
   },
   {
     group: 'Passenger Information',
+    kinds: 'platform,concourse,waiting hall,booking office,reservation office,circulating area,entrance,exit,fob,subway',
     items: [
       { name: 'Station Name Board', dept: 'ENGG', category: 'Passenger Information' },
       { name: 'Platform Number Board', dept: 'ENGG', category: 'Passenger Information' },
@@ -70,6 +75,7 @@ export const passengerAmenities = [
   },
   {
     group: 'Accessibility',
+    kinds: 'platform,concourse,booking office,reservation office,circulating area,entrance,exit,fob,subway,parking',
     items: [
       { name: 'Foot Over Bridge', dept: 'ENGG', category: 'Passenger Amenity', severity: 'Major' },
       { name: 'Ramp', dept: 'ENGG', category: 'Passenger Amenity' },
@@ -104,6 +110,7 @@ export const passengerAmenities = [
 export const commercialInspection = [
   {
     group: 'Ticketing',
+    kinds: 'booking office,reservation office,concourse',
     items: [
       { name: 'UTS', dept: 'COM', category: 'Ticketing' },
       { name: 'PRS', dept: 'COM', category: 'Ticketing' },
@@ -123,6 +130,7 @@ export const commercialInspection = [
   },
   {
     group: 'Catering Units',
+    kinds: 'catering,platform,concourse,waiting hall',
     items: [
       { name: 'Static Catering', dept: 'COM', category: 'Catering' },
       { name: 'Mobile Catering', dept: 'COM', category: 'Catering', applies: 'both' },
@@ -137,6 +145,7 @@ export const commercialInspection = [
   },
   {
     group: 'Catering Inspection Items',
+    kinds: 'catering,platform,concourse,waiting hall,pantry',
     items: [
       { name: 'Licence', dept: 'COM', category: 'Licensing', applies: 'both' },
       { name: 'Rate List', dept: 'COM', category: 'Catering', applies: 'both' },
@@ -157,6 +166,7 @@ export const commercialInspection = [
   },
   {
     group: 'Parcel',
+    kinds: 'parcel office,brake van',
     items: [
       { name: 'Parcel Booking', dept: 'COM', category: 'Parcel' },
       { name: 'Parcel Delivery', dept: 'COM', category: 'Parcel' },
@@ -188,6 +198,7 @@ export const commercialInspection = [
   },
   {
     group: 'Revenue',
+    kinds: 'booking office,reservation office,parcel office',
     items: [
       { name: 'Short Collection', dept: 'COM', category: 'Revenue', severity: 'Major' },
       { name: 'Non-collection', dept: 'COM', category: 'Revenue', severity: 'Major' },
@@ -231,6 +242,7 @@ export const commercialInspection = [
 export const safeRunningCommercial = [
   {
     group: 'A. Passenger Entry/Exit & Boarding',
+    kinds: 'platform,entrance,exit,fob,subway,concourse,door',
     items: [
       { name: 'Passenger movement at platform', dept: 'COM', category: 'Passenger Movement', severity: 'Major', applies: 'both' },
       { name: 'Boarding arrangements', dept: 'COM', category: 'Passenger Movement', severity: 'Major', applies: 'both' },
@@ -245,6 +257,7 @@ export const safeRunningCommercial = [
   },
   {
     group: 'B. Coach/Train Commercial Working',
+    kinds: 'coach,compartment,vestibule,door,gangway,toilet,platform',
     items: [
       { name: 'Coach number/display', dept: 'MECH', category: 'Train Working', severity: 'Major', applies: 'both' },
       { name: 'Coach identification', dept: 'MECH', category: 'Train Working', severity: 'Major', applies: 'both' },
@@ -261,6 +274,7 @@ export const safeRunningCommercial = [
   },
   {
     group: 'C. Catering-Related Passenger Movement & Safety',
+    kinds: 'catering,pantry,platform,coach',
     items: [
       { name: 'Unauthorised vendors', dept: 'RPF', category: 'Safe Running - Commercial', severity: 'Major', applies: 'both' },
       { name: 'Obstruction by catering activity', dept: 'COM', category: 'Safe Running - Commercial', severity: 'Major', applies: 'both' },
@@ -274,6 +288,7 @@ export const safeRunningCommercial = [
   },
   {
     group: 'D. Parcel/Luggage',
+    kinds: 'parcel office,brake van,platform',
     items: [
       { name: 'Unauthorised loading', dept: 'COM', category: 'Parcel', severity: 'Major', applies: 'both' },
       { name: 'Improperly placed luggage', dept: 'COM', category: 'Parcel', severity: 'Major', applies: 'both' },

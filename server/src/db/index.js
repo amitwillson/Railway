@@ -6,6 +6,9 @@ import config from '../config.js';
 
 const SCHEMA_FILE = path.join(path.dirname(fileURLToPath(import.meta.url)), 'schema.sql');
 
+/** Where the view definitions start in schema.sql. */
+const VIEWS_MARKER = 'DROP VIEW IF EXISTS v_observations';
+
 let db;
 
 /** Opens (and on first call, creates + migrates) the SQLite database. */
@@ -30,6 +33,18 @@ export function getDb() {
  */
 const ADDED_COLUMNS = [
   { table: 'observations', column: 'deficiency_id', definition: 'INTEGER REFERENCES item_deficiencies(id)' },
+  { table: 'observations', column: 'inspection_area_id', definition: 'INTEGER REFERENCES inspection_areas(id)' },
+  // The inspection became the unit of record: one visit over many areas.
+  { table: 'inspections', column: 'inspection_no', definition: 'TEXT' },
+  { table: 'inspections', column: 'scope', definition: "TEXT NOT NULL DEFAULT 'station'" },
+  { table: 'inspections', column: 'from_time', definition: 'TEXT' },
+  { table: 'inspections', column: 'to_time', definition: 'TEXT' },
+  { table: 'inspections', column: 'previous_inspection_id', definition: 'INTEGER REFERENCES inspections(id)' },
+  { table: 'inspections', column: 'report_status', definition: "TEXT NOT NULL DEFAULT 'draft'" },
+  { table: 'inspections', column: 'report_issued_at', definition: 'TEXT' },
+  { table: 'inspections', column: 'report_issued_by', definition: 'INTEGER REFERENCES users(id)' },
+  { table: 'inspections', column: 'general_remarks', definition: 'TEXT' },
+  { table: 'item_groups', column: 'applies_to_kinds', definition: 'TEXT' },
   { table: 'stations', column: 'section', definition: 'TEXT' },
   { table: 'stations', column: 'state', definition: 'TEXT' },
   { table: 'stations', column: 'district', definition: 'TEXT' },
@@ -37,22 +52,30 @@ const ADDED_COLUMNS = [
   { table: 'stations', column: 'km', definition: 'REAL' },
 ];
 
-/** Applies schema.sql. It is written to be idempotent (CREATE ... IF NOT EXISTS). */
+/**
+ * Applies schema.sql. It is written to be idempotent (CREATE ... IF NOT EXISTS).
+ *
+ * The order matters for a database being upgraded in place. CREATE TABLE IF NOT
+ * EXISTS leaves an existing table alone, so on such a database a new column only
+ * arrives through the ALTER statements - while the indexes and the views in the
+ * file both name those columns. So the ALTERs run first: on a fresh database the
+ * table does not exist yet, the `existing.length` guard skips them, and the
+ * CREATE TABLE that follows declares every column anyway.
+ */
 export function migrate(database = getDb()) {
   const sql = fs.readFileSync(SCHEMA_FILE, 'utf8');
-  database.exec(sql);
-  let added = 0;
+  const viewsAt = sql.indexOf(VIEWS_MARKER);
+  const tables = viewsAt >= 0 ? sql.slice(0, viewsAt) : sql;
+  const views = viewsAt >= 0 ? sql.slice(viewsAt) : '';
+
   for (const { table, column, definition } of ADDED_COLUMNS) {
     const existing = database.prepare(`PRAGMA table_info(${table})`).all();
     if (existing.length && !existing.some((c) => c.name === column)) {
       database.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
-      added += 1;
     }
   }
-  // v_observations selects o.*, so it has to be rebuilt after a column is added.
-  // schema.sql already recreates the views, but it ran before the ALTER.
-  const views = sql.indexOf('DROP VIEW IF EXISTS v_observations');
-  if (added > 0 && views >= 0) database.exec(sql.slice(views));
+  database.exec(tables);
+  if (views) database.exec(views);
   return database;
 }
 
