@@ -350,8 +350,10 @@ router.get(
     }
     if (format === 'csv') {
       // One file, the parts stacked - the shape a clerk can paste into a return.
+      // One file with the parts stacked. The byte-order mark goes at the very top
+      // and nowhere else, so the inner tables are asked for without one.
       const parts = [
-        `Inspection Report,${inspection.inspection_no ?? inspection.ref_no}`,
+        `﻿Inspection Report,${inspection.inspection_no ?? inspection.ref_no}`,
         `Location,${report.place.name}`,
         `Date,${(inspection.started_at ?? inspection.created_at ?? '').slice(0, 10)}`,
         `Inspecting officer,"${inspection.inspector_name}"`,
@@ -360,16 +362,16 @@ router.get(
         `Items checked,${report.coverage.items_checked}`,
         '',
         'PART I - Review of the previous inspection',
-        toCsv(previousRows(report), PREVIOUS_COLUMNS),
+        toCsv(previousRows(report), PREVIOUS_COLUMNS, { bom: false }),
         '',
         'PART II - Areas inspected',
-        toCsv(areaRows(report), AREA_COLUMNS),
+        toCsv(areaRows(report), AREA_COLUMNS, { bom: false }),
         '',
         'PART III - Deficiencies noticed',
-        toCsv(report.observations.map(decorate), OBSERVATION_COLUMNS),
+        toCsv(report.observations.map(decorate), OBSERVATION_COLUMNS, { bom: false }),
         '',
         'PART IV - Items checked, with result',
-        toCsv(itemResultRows(report), ITEM_RESULT_COLUMNS),
+        toCsv(itemResultRows(report), ITEM_RESULT_COLUMNS, { bom: false }),
       ];
       download(res, { fileName: `${stem}.csv`, contentType: 'text/csv; charset=utf-8' });
       res.send(parts.join('\n'));

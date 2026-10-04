@@ -18,12 +18,14 @@
     "dev:web": "npm run dev --workspace web",
     "build": "npm run build --workspace web",
     "start": "npm start --workspace server",
-    "test": "npm test --workspace server",
+    "test": "npm test --workspace server && npm test --workspace web",
     "seed:reset": "npm run seed:reset --workspace server",
     "typecheck": "npm run typecheck --workspace web",
     "smoke": "node scripts/smoke-test.mjs",
     "build:demo": "npm run seed:reset && node web/scripts/make-demo-data.mjs && npm run build:demo --workspace web && node web/scripts/build-demo.mjs",
-    "check:demo": "node scripts/demo-check.mjs"
+    "check:demo": "node scripts/demo-check.mjs",
+    "test:server": "npm test --workspace server",
+    "test:demo": "npm test --workspace web"
   },
   "devDependencies": {
     "concurrently": "^9.1.0"

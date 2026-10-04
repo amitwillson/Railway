@@ -264,9 +264,44 @@ describe('an observation and its area', () => {
 
     db.update('observations', observation.id, { status: 'cancelled', cancel_reason: 'Raised in error' });
     const next = sheet.refreshAreaResult(area.id);
-    // Items were checked there, so it is satisfactory rather than untouched.
-    assert.equal(next, 'satisfactory');
-    assert.equal(areaNamed(id, 'Platform No. 2').result, 'satisfactory');
+    // The only thing recorded in that area was the item the observation itself
+    // marked deficient. Cancel the observation and nothing was checked there, so
+    // the area is untouched again - not "found in order", which would be a claim
+    // nobody made.
+    assert.equal(next, 'not_inspected');
+    assert.equal(areaNamed(id, 'Platform No. 2').result, 'not_inspected');
+    assert.equal(
+      db.get('SELECT COUNT(*) AS n FROM inspection_item_results WHERE inspection_area_id = ?', [area.id]).n,
+      0,
+      'the item must not be left reading deficient against an observation that no longer stands'
+    );
+  });
+
+  test('an area the inspector did check stays satisfactory when a deficiency is cancelled', async () => {
+    const id = newInspection();
+    const area = areaNamed(id, 'Platform No. 2');
+    // The inspector ticked two items off here themselves.
+    sheet.recordItemResults(id, area.id, [
+      { item_id: ids.secondItem, result: 'ok' },
+    ]);
+    const { observation } = await createObservation({
+      payload: {
+        inspection_id: id,
+        unit_id: ids.unitPf2,
+        item_id: ids.item,
+        observation: 'A third item here was found wanting, and the finding is later withdrawn.',
+        action_by_department_id: ids.deptElec,
+      },
+      user: inspector,
+    });
+    assert.equal(areaNamed(id, 'Platform No. 2').result, 'deficiencies');
+
+    db.update('observations', observation.id, { status: 'cancelled', cancel_reason: 'Raised in error' });
+    assert.equal(sheet.refreshAreaResult(area.id), 'satisfactory');
+    // The inspector's own tick survives; only the withdrawn deficiency goes.
+    const rows = db.all('SELECT * FROM inspection_item_results WHERE inspection_area_id = ?', [area.id]);
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].item_id, ids.secondItem);
   });
 
   test('an observation in an area that was never on the sheet puts that area on it', async () => {
@@ -410,6 +445,73 @@ describe('the inspection report', () => {
     const march = report.nextInspectionNo('TEST/SI', '2027-03-31');
     assert.match(april, /\/2027-28\/001$/);
     assert.match(march, /\/2026-27\/001$/);
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* Upgrading a database that was written before the sheet existed             */
+/* -------------------------------------------------------------------------- */
+
+describe('migrating an older database', () => {
+  test('an inspection written before `scope` existed is read from where it happened', () => {
+    // The column arrives with a constant default, so every row would otherwise
+    // read as a station inspection and a train inspection would be offered the
+    // platforms. The backfill in migrate() is what puts them right; this asserts
+    // the rule it applies.
+    const train = db.insert('trains', { number: '20001', name: 'Backfill Express' });
+    const rows = [
+      { ref_no: 'MIG-TRAIN', train_id: train, station_id: null, section: null, expected: 'train' },
+      { ref_no: 'MIG-SECTION', train_id: null, station_id: null, section: 'JSG-BSP', expected: 'section' },
+      { ref_no: 'MIG-STATION', train_id: null, station_id: ids.station, section: null, expected: 'station' },
+    ];
+    for (const row of rows) {
+      db.insert('inspections', {
+        ref_no: row.ref_no,
+        module_id: ids.module,
+        inspection_type_id: ids.type,
+        location_type: 'Other',
+        scope: 'station', // what ALTER TABLE's default would have left
+        station_id: row.station_id,
+        train_id: row.train_id,
+        section: row.section,
+        inspector_id: inspector.id,
+        status: 'completed',
+      });
+    }
+    db.getDb().exec(
+      `UPDATE inspections SET scope =
+         CASE WHEN train_id IS NOT NULL THEN 'train'
+              WHEN station_id IS NULL AND section IS NOT NULL THEN 'section'
+              ELSE 'station' END
+       WHERE ref_no LIKE 'MIG-%'`
+    );
+    for (const row of rows) {
+      assert.equal(
+        db.get('SELECT scope FROM inspections WHERE ref_no = ?', [row.ref_no]).scope,
+        row.expected,
+        row.ref_no
+      );
+    }
+  });
+
+  test('an inspection with no sheet at all reads as covering nothing, not as complete', () => {
+    const id = db.insert('inspections', {
+      ref_no: 'MIG-NOSHEET',
+      module_id: ids.module,
+      inspection_type_id: ids.type,
+      location_type: 'Station',
+      station_id: ids.station,
+      inspector_id: inspector.id,
+      status: 'completed',
+    });
+    const view = db.get('SELECT * FROM v_inspections i WHERE i.id = ?', [id]);
+    assert.equal(view.areas_on_sheet, 0);
+    assert.equal(view.areas_covered, 0);
+    // Not 0% and not 100%: with nothing on the sheet there is no coverage to state.
+    assert.equal(view.coverage_pct, null);
+    const model = report.reportFor(id);
+    assert.equal(model.areas.length, 0);
+    assert.match(model.narrative, /was carried out by/);
   });
 });
 

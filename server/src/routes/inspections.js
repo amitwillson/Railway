@@ -62,6 +62,7 @@ router.get(
       train_id: optionalId,
       inspector_id: optionalId,
       status: optionalText,
+      scope: z.enum(['station', 'train', 'section']).optional(),
       location_type: optionalText,
       from: optionalIsoDate,
       to: optionalIsoDate,
@@ -84,6 +85,7 @@ router.get(
     eq('station_id', f.station_id);
     eq('train_id', f.train_id);
     eq('inspector_id', f.inspector_id);
+    eq('scope', f.scope);
     eq('location_type', f.location_type);
     if (f.status) {
       const list = f.status.split(',').map((s) => s.trim()).filter(Boolean);
@@ -266,6 +268,13 @@ router.patch(
     if (inspection.inspector_id !== req.user.id && !isOfficer(req.user)) {
       throw forbidden('Only the inspecting officer or a divisional officer can change this inspection');
     }
+    // An issued report is a record, exactly as an issued inspection note is: its
+    // wording is fixed, while the status of what it cites still reads live.
+    if (inspection.report_status === 'issued') {
+      throw badRequest(
+        `The report ${inspection.inspection_no} has been issued; its wording can no longer be changed`
+      );
+    }
     const changes = { ...req.body, updated_at: nowIso() };
     if (changes.status === 'completed' && !inspection.completed_at) changes.completed_at = nowIso();
     update('inspections', inspection.id, changes);
@@ -291,6 +300,9 @@ function ownInspection(req) {
   if (!inspection) throw notFound('Inspection');
   if (inspection.inspector_id !== req.user.id && !isOfficer(req.user)) {
     throw forbidden('Only the inspecting officer or a divisional officer can change this inspection');
+  }
+  if (inspection.status === 'cancelled') {
+    throw badRequest('This inspection has been cancelled');
   }
   if (inspection.report_status === 'issued') {
     throw badRequest(`The report ${inspection.inspection_no} has been issued; this inspection is now a record`);
@@ -324,7 +336,7 @@ router.post(
   requireCapability('inspection:update'),
   body(
     z.object({
-      unit_ids: z.array(z.coerce.number().int().positive()).optional(),
+      unit_ids: z.array(z.coerce.number().int().positive()).max(500).optional(),
       coach: optionalText,
     })
   ),
@@ -402,7 +414,10 @@ router.post(
               .optional(),
           })
         )
-        .min(1, 'Record at least one item'),
+        .min(1, 'Record at least one item')
+        // An area has a few dozen items at most; a larger batch is a mistake or an
+        // abuse, and either way is not worth writing.
+        .max(500, 'Too many items in one request'),
     })
   ),
   (req, res) => {
@@ -449,6 +464,15 @@ router.post(
     const inspection = ownInspection(req);
     const observation = get('SELECT * FROM v_observations o WHERE o.id = ?', [req.params.observationId]);
     if (!observation) throw notFound('Observation');
+
+    // Part I reviews what the previous inspection of this place left outstanding,
+    // and nothing else. Without this the route would close any observation in the
+    // division by its id, straight past the compliance workflow.
+    if (!previousOutstanding(inspection.id).items.some((item) => item.id === observation.id)) {
+      throw badRequest(
+        `${observation.ref_no} is not one of the items carried forward by this inspection`
+      );
+    }
     const { finding, remarks } = req.body;
 
     const existing = get(

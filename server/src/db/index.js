@@ -36,7 +36,18 @@ const ADDED_COLUMNS = [
   { table: 'observations', column: 'inspection_area_id', definition: 'INTEGER REFERENCES inspection_areas(id)' },
   // The inspection became the unit of record: one visit over many areas.
   { table: 'inspections', column: 'inspection_no', definition: 'TEXT' },
-  { table: 'inspections', column: 'scope', definition: "TEXT NOT NULL DEFAULT 'station'" },
+  {
+    table: 'inspections',
+    column: 'scope',
+    definition: "TEXT NOT NULL DEFAULT 'station'",
+    // Every existing row would otherwise read as a station inspection, and a
+    // train inspection would be offered the platforms. What the row already says
+    // about where it happened decides it.
+    backfill: `UPDATE inspections SET scope =
+                 CASE WHEN train_id IS NOT NULL THEN 'train'
+                      WHEN station_id IS NULL AND section IS NOT NULL THEN 'section'
+                      ELSE 'station' END`,
+  },
   { table: 'inspections', column: 'from_time', definition: 'TEXT' },
   { table: 'inspections', column: 'to_time', definition: 'TEXT' },
   { table: 'inspections', column: 'previous_inspection_id', definition: 'INTEGER REFERENCES inspections(id)' },
@@ -68,10 +79,13 @@ export function migrate(database = getDb()) {
   const tables = viewsAt >= 0 ? sql.slice(0, viewsAt) : sql;
   const views = viewsAt >= 0 ? sql.slice(viewsAt) : '';
 
-  for (const { table, column, definition } of ADDED_COLUMNS) {
+  for (const { table, column, definition, backfill } of ADDED_COLUMNS) {
     const existing = database.prepare(`PRAGMA table_info(${table})`).all();
     if (existing.length && !existing.some((c) => c.name === column)) {
       database.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+      // A column added with a constant default needs the rows that were already
+      // there put right. This runs once, when the column first appears.
+      if (backfill) database.exec(backfill);
     }
   }
   database.exec(tables);

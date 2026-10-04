@@ -93,22 +93,30 @@ npm run build:demo        # rebuild it from the current seed
 ### Tests
 
 ```bash
-npm test                    # 117 unit and API tests: engines, workflow, RBAC, sync, reports, TDC,
-                            # supervisor links, suggested deficiencies, notes, station import,
-                            # the inspection sheet, the report and its issuing
+npm test                    # 140 tests: 127 against the server, 13 against the offline backend
+npm run test:server         # engines, workflow, RBAC, sync, reports, TDC, supervisor links,
+                            # suggested deficiencies, notes, station import, the inspection
+                            # sheet, the report and its issuing, and the schema migration
+npm run test:demo           # the offline backend's own rules, asserted directly
 npm run smoke               # 84-check end-to-end walkthrough against a running server
-npm run check:demo          # drives the offline build in a real browser from file://
+npm run check:demo          # drives the built offline file in a real browser from file://
 ```
 
 `npm test` runs against throw-away databases and needs nothing else. `npm run smoke` drives the
 reference scenario through a running server (`npm start`) and prints each check as it goes.
 
-`npm run check:demo` exists because the single-file build has its own backend &mdash; the
-in-browser router in `web/src/demo` &mdash; and a route it is missing fails as a toast *inside the
-page*, where neither a type-check nor a unit test can see it. The check walks an inspection through
-to its issued report and fails on any error toast, any page error, or **any network request at
-all**. Playwright is not a dependency of this repository, so the check says how to install it and
-skips rather than failing if it is not there:
+**The offline build has a second backend**, and that is worth two checks of its own.
+`web/src/demo/router.ts` reimplements the server's engines in the browser so the single-file
+demonstration runs the real UI with no server &mdash; and two implementations of the same rules
+drift. When the demo one is wrong it fails as a toast *inside the page*: no console error, no failed
+request, nothing a type-check or a server test can see.
+
+* `npm run test:demo` bundles that router with esbuild and calls it directly, so its rules can be
+  asserted rather than inferred from what the screen happens to show. It runs as part of `npm test`.
+* `npm run check:demo` drives the *built* file in a real browser, walking an inspection through to
+  its issued report, and fails on any error toast, any page error, or **any network request at
+  all**. Playwright is not a dependency of this repository, so it says how to install it and skips
+  rather than failing if it is absent:
 
 ```bash
 npm i -D playwright && npx playwright install chromium

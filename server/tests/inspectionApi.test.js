@@ -297,6 +297,149 @@ describe('the report', () => {
     for (const part of ['PART I', 'PART II', 'PART III', 'PART IV']) {
       assert.ok(csv.text.includes(part), `the CSV must carry ${part}`);
     }
+    // The byte-order mark belongs at the start of the file and nowhere else. The
+    // parts are separate tables stacked into one file, so a mark per table would
+    // print as rubbish before every heading but the first.
+    assert.ok(csv.text.startsWith('\ufeff'), 'the file must open with a byte-order mark');
+    assert.equal(
+      (csv.text.match(/\ufeff/g) ?? []).length,
+      1,
+      'exactly one byte-order mark, at the top'
+    );
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* What must not be possible                                                  */
+/* -------------------------------------------------------------------------- */
+
+describe('the record cannot be got at sideways', () => {
+  test('the previous-inspection review only accepts items this inspection carried forward', async () => {
+    // An inspection of a different station, so it can never be the predecessor of
+    // the one that will try to close its observation.
+    const elsewhere = await startInspection({ station_id: ids.otherStation });
+    const stray = await auth(request(app).post('/api/observations'), inspectorToken).send({
+      inspection_id: elsewhere.id,
+      unit_id: ids.unitHall,
+      item_id: ids.item,
+      observation: 'An observation belonging to an inspection of another station entirely.',
+      action_by_department_id: ids.deptElec,
+    });
+    assert.equal(stray.status, 201);
+
+    const current = await startInspection();
+    const response = await auth(
+      request(app).post(`/api/inspections/${current.id}/previous/${stray.body.id}`),
+      inspectorToken
+    ).send({ finding: 'complied' });
+
+    // Without this guard the route closes any observation in the division by its
+    // id, straight past acknowledge, compliance and verification.
+    assert.equal(response.status, 400, JSON.stringify(response.body));
+    assert.match(response.body.error.message, /not one of the items carried forward/i);
+    assert.notEqual(
+      db.get('SELECT status FROM observations WHERE id = ?', [stray.body.id]).status,
+      'closed'
+    );
+  });
+
+  test('an issued report cannot be reworded', async () => {
+    const created = await startInspection();
+    await auth(request(app).post(`/api/inspections/${created.id}/complete`), inspectorToken).send({});
+    await auth(request(app).post(`/api/inspections/${created.id}/issue`), inspectorToken).send({});
+
+    const response = await auth(request(app).patch(`/api/inspections/${created.id}`), inspectorToken)
+      .send({ general_remarks: 'added after the report went out', summary: 'rewritten' });
+    assert.equal(response.status, 400);
+    assert.match(response.body.error.message, /can no longer be changed/i);
+    assert.equal(
+      db.get('SELECT general_remarks FROM inspections WHERE id = ?', [created.id]).general_remarks,
+      null
+    );
+  });
+
+  test('a cancelled inspection takes no more sheet writes', async () => {
+    const created = await startInspection();
+    const sheet = await sheetOf(created.id);
+    await auth(request(app).patch(`/api/inspections/${created.id}`), inspectorToken).send({ status: 'cancelled' });
+
+    const area = await auth(
+      request(app).patch(`/api/inspections/${created.id}/areas/${sheet.areas[0].id}`),
+      inspectorToken
+    ).send({ result: 'satisfactory' });
+    assert.equal(area.status, 400);
+    assert.match(area.body.error.message, /cancelled/i);
+  });
+
+  test('cancelling an observation takes its item result with it', async () => {
+    const created = await startInspection();
+    const sheet = await sheetOf(created.id);
+    const area = sheet.areas.find((a) => a.unit_name === 'Platform No. 2');
+    const observation = await auth(request(app).post('/api/observations'), inspectorToken).send({
+      inspection_id: created.id,
+      inspection_area_id: area.id,
+      unit_id: area.unit_id,
+      item_id: ids.item,
+      observation: 'Recorded here, and later found to have been raised in error.',
+      action_by_department_id: ids.deptElec,
+    });
+    assert.equal(
+      db.get('SELECT result FROM inspection_item_results WHERE inspection_area_id = ? AND item_id = ?', [
+        area.id, ids.item,
+      ]).result,
+      'deficient'
+    );
+
+    const cancelled = await auth(
+      request(app).post(`/api/observations/${observation.body.id}/cancel`),
+      officerToken
+    ).send({ reason: 'Raised against the wrong platform' });
+    assert.equal(cancelled.status, 200, JSON.stringify(cancelled.body));
+
+    // The area goes back to what it is, and the item must not be left reading
+    // "deficient" against an observation that no longer stands.
+    const after_ = await sheetOf(created.id);
+    const back = after_.areas.find((a) => a.id === area.id);
+    assert.notEqual(back.result, 'deficiencies');
+    assert.equal(
+      db.get('SELECT COUNT(*) AS n FROM inspection_item_results WHERE inspection_area_id = ? AND item_id = ?', [
+        area.id, ids.item,
+      ]).n,
+      0
+    );
+  });
+
+  test('an observation cannot be filed against another inspection\'s area', async () => {
+    const a = await startInspection();
+    const b = await startInspection();
+    const foreign = (await sheetOf(a.id)).areas[0];
+    const response = await auth(request(app).post('/api/observations'), inspectorToken).send({
+      inspection_id: b.id,
+      inspection_area_id: foreign.id,
+      unit_id: foreign.unit_id,
+      item_id: ids.item,
+      observation: 'Filed against one inspection while naming another inspection\'s area.',
+      action_by_department_id: ids.deptElec,
+    });
+    assert.equal(response.status, 404);
+  });
+
+  test('item results cannot be recorded into another inspection\'s area', async () => {
+    const a = await startInspection();
+    const b = await startInspection();
+    const foreign = (await sheetOf(a.id)).areas[0];
+    const response = await auth(
+      request(app).post(`/api/inspections/${b.id}/areas/${foreign.id}/items`),
+      inspectorToken
+    ).send({ results: [{ item_id: ids.item, result: 'ok' }] });
+    assert.equal(response.status, 404);
+  });
+
+  test('the inspection list filters by scope', async () => {
+    const all_ = await auth(request(app).get('/api/inspections'), inspectorToken);
+    const trains = await auth(request(app).get('/api/inspections?scope=train'), inspectorToken);
+    assert.ok(all_.body.total > 0);
+    assert.equal(trains.body.total, 0, 'every inspection here is of a station');
   });
 });
 

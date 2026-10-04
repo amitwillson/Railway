@@ -14,11 +14,16 @@ const csvCell = (value) => {
 };
 
 /** columns: [{ key, label }] */
-export function toCsv(rows, columns) {
+/**
+ * A CSV table. The byte-order mark keeps Excel happy with UTF-8 station names,
+ * but it belongs at the start of a *file* and nowhere else - so a caller that
+ * stacks several tables into one file (the inspection report does) asks for it
+ * once, on the first, with `bom: false` on the rest.
+ */
+export function toCsv(rows, columns, { bom = true } = {}) {
   const head = columns.map((c) => csvCell(c.label)).join(',');
   const body = rows.map((r) => columns.map((c) => csvCell(pick(r, c))).join(','));
-  // BOM keeps Excel happy with UTF-8 station names.
-  return `﻿${[head, ...body].join('\r\n')}\r\n`;
+  return `${bom ? '﻿' : ''}${[head, ...body].join('\r\n')}\r\n`;
 }
 
 const pick = (row, col) => (typeof col.value === 'function' ? col.value(row) : row[col.key]);

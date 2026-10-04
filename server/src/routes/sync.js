@@ -6,6 +6,7 @@ import { authenticate, requireCapability } from '../middleware/auth.js';
 import { asyncRoute } from '../lib/http.js';
 import { body, z, optionalText } from '../lib/validate.js';
 import { createObservation } from '../services/observationService.js';
+import { linkPreviousInspection, openSheet } from '../lib/inspectionSheet.js';
 import { observationById } from '../lib/queries.js';
 
 const router = express.Router();
@@ -127,11 +128,17 @@ router.post(
             results.push({ client_uuid: op.client_uuid, type: op.type, status: 'duplicate', id: existing.id, ref_no: existing.ref_no });
             continue;
           }
+          const scope =
+            op.payload.scope ??
+            (op.payload.train_id ? 'train' : op.payload.station_id ? 'station' : 'section');
           const id = insert('inspections', {
             ref_no: nextRef('inspections', 'INSP'),
             module_id: op.payload.module_id,
             inspection_type_id: op.payload.inspection_type_id,
-            location_type: op.payload.location_type,
+            scope,
+            location_type:
+              op.payload.location_type ??
+              (scope === 'train' ? 'Train' : scope === 'section' ? 'Other' : 'Station'),
             station_id: op.payload.station_id ?? null,
             train_id: op.payload.train_id ?? null,
             section: op.payload.section ?? null,
@@ -140,6 +147,8 @@ router.post(
             joint_with: op.payload.joint_with ?? null,
             planned_date: op.payload.planned_date ?? null,
             started_at: op.payload.started_at ?? nowIso(),
+            from_time: op.payload.from_time ?? null,
+            to_time: op.payload.to_time ?? null,
             status: 'in_progress',
             notes: op.payload.notes ?? null,
             latitude: op.payload.latitude ?? null,
@@ -147,6 +156,13 @@ router.post(
             qr_token: randomToken(10),
             client_uuid: op.client_uuid,
           });
+          // A device with no signal cannot open the sheet, because it does not know
+          // the station's areas. The server does, so the sheet is opened as the
+          // inspection arrives: the deficiencies recorded offline mark their own
+          // areas, and the areas the officer could not attend to are recorded as
+          // not inspected, which is what happened.
+          linkPreviousInspection(id);
+          openSheet(id);
           inspectionIds.set(op.client_uuid, id);
           const row = get('SELECT ref_no FROM inspections WHERE id = ?', [id]);
           audit(req, {

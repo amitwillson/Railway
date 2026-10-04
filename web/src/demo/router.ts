@@ -838,6 +838,19 @@ function markAreaDeficient(observation: Row): number | null {
 function refreshAreaResult(areaId: number): string | null {
   const area = byId('inspection_areas', areaId);
   if (!area) return null;
+
+  // An item marked deficient by an observation that has since been cancelled was
+  // never a deficiency, so its row goes with it.
+  const cancelled = new Set(
+    where('observations', (o) => o.status === 'cancelled').map((o) => o.id)
+  );
+  const rows = table('inspection_item_results');
+  for (let i = rows.length - 1; i >= 0; i -= 1) {
+    if (rows[i].inspection_area_id === areaId && rows[i].observation_id && cancelled.has(rows[i].observation_id)) {
+      rows.splice(i, 1);
+    }
+  }
+
   const live = where('observations', (o) => o.inspection_area_id === areaId && o.status !== 'cancelled').length;
   if (live > 0) {
     if (area.result !== 'deficiencies') update('inspection_areas', areaId, { result: 'deficiencies', updated_at: nowIso() });
@@ -1033,6 +1046,8 @@ on('GET', '/inspections', ({ q, user }) => {
       if (!eq('station_id', 'station_id')) return false;
       if (!eq('train_id', 'train_id')) return false;
       if (!eq('inspector_id', 'inspector_id')) return false;
+      const scope = q.get('scope');
+      if (scope && i.scope !== scope) return false;
       if (status?.length && !status.includes(i.status)) return false;
       const from = q.get('from');
       if (from && dateOnly(i.created_at)! < from) return false;
@@ -1120,6 +1135,10 @@ on('PATCH', '/inspections/:id', ({ params, body, user }) => {
   require_(user, 'inspection:update');
   const inspection = byId('inspections', params[0]);
   if (!inspection) throw notFound('Inspection');
+  // An issued report is a record, exactly as an issued inspection note is.
+  if (inspection.report_status === 'issued') {
+    throw bad(`The report ${inspection.inspection_no} has been issued; its wording can no longer be changed`);
+  }
   const previous = { ...inspection };
   update('inspections', inspection.id, { ...body, updated_at: nowIso() });
   audit({ action: 'INSPECTION_UPDATE', entityType: 'inspection', entityId: inspection.id, user, previous, next: inspection });
@@ -1406,6 +1425,7 @@ function ownInspection(id: string | number, user: Row): Row {
   if (inspection.inspector_id !== user.id && !isOfficer(user)) {
     throw forbidden('Only the inspecting officer or a divisional officer can change this inspection');
   }
+  if (inspection.status === 'cancelled') throw bad('This inspection has been cancelled');
   if (inspection.report_status === 'issued') {
     throw bad(`The report ${inspection.inspection_no} has been issued; this inspection is now a record`);
   }
@@ -1474,6 +1494,12 @@ on('POST', '/inspections/:id/previous/:observationId', ({ params, body, user }) 
   const inspection = ownInspection(params[0], user);
   const observation = byId('observations', params[1]);
   if (!observation) throw notFound('Observation');
+  // Part I reviews what the previous inspection of this place left outstanding,
+  // and nothing else - otherwise the route would close any observation by its id,
+  // straight past the compliance workflow.
+  if (!previousOutstanding(inspection.id).items.some((item: Row) => item.id === observation.id)) {
+    throw bad(`${observation.ref_no} is not one of the items carried forward by this inspection`);
+  }
   const finding = body?.finding;
   if (!['complied', 'partially_complied', 'not_complied', 'dropped'].includes(finding)) {
     throw bad('Unknown finding');

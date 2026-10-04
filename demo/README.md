@@ -81,7 +81,8 @@ dataset**. Nothing is written to disk and nothing leaves the machine.
 
 ```bash
 npm run build:demo        # reseeds, exports the fixture, builds, inlines into one file
-npm run check:demo        # drives the result in a real browser, from file://
+npm run test:demo         # asserts the offline backend's rules directly (part of npm test)
+npm run check:demo        # drives the built file in a real browser, from file://
 ```
 
 The fixture is exported from the seeded SQLite database by `web/scripts/make-demo-data.mjs`, so the
@@ -92,10 +93,17 @@ the in-browser backend, serves evidence from embedded images and switches to has
 The backend, though, is a second implementation &mdash; `web/src/demo/router.ts` mirrors the
 server's engines in the browser &mdash; so the two can drift. A route the server has and the demo
 does not fails as a toast *inside the page*: no console error, no failed request, nothing a
-type-check or a unit test would see. `npm run check:demo` is what catches that. It walks an
-inspection through to its issued report and fails on any error toast, any page error, or any
-network request at all. It needs Playwright, which is not a dependency of this repository, so it
-says how to install it and skips rather than failing if it is absent:
+type-check or a server test would see. Two checks cover that.
+
+`npm run test:demo` bundles the router with esbuild and calls it directly, asserting the rules
+themselves: that every route is reachable, that an area carrying an observation cannot be marked in
+order, that an issued report cannot be reworded, that the previous-inspection review only accepts
+items this inspection carried forward. It runs as part of `npm test`.
+
+`npm run check:demo` drives the *built* file in a browser, walking an inspection through to its
+issued report, and fails on any error toast, any page error, or any network request at all. It
+needs Playwright, which is not a dependency of this repository, so it says how to install it and
+skips rather than failing if it is absent:
 
 ```bash
 npm i -D playwright && npx playwright install chromium

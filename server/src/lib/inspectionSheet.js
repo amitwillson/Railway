@@ -180,6 +180,18 @@ export function markAreaDeficient(observation) {
 export function refreshAreaResult(areaId) {
   const area = get('SELECT * FROM inspection_areas WHERE id = ?', [areaId]);
   if (!area) return null;
+
+  // An item marked deficient by an observation that has since been cancelled was
+  // never a deficiency, so its row goes with it. Leaving it would make Part II say
+  // the area was found in order while the item record still read "deficient", and
+  // point at an observation that no longer stands.
+  run(
+    `DELETE FROM inspection_item_results
+      WHERE inspection_area_id = ?
+        AND observation_id IN (SELECT id FROM observations WHERE status = 'cancelled')`,
+    [areaId]
+  );
+
   const live = get(
     "SELECT COUNT(*) AS n FROM observations WHERE inspection_area_id = ? AND status <> 'cancelled'",
     [areaId]
