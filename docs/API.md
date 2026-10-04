@@ -75,12 +75,35 @@ see everything.
 | Method | Path | Notes |
 | --- | --- | --- |
 | GET | `/inspections` | `mine`, `module_id`, `station_id`, `train_id`, `status`, `from`, `to`, `q`, paging |
-| POST | `/inspections` | `client_uuid` makes it idempotent |
-| GET | `/inspections/:id` | With observations, approvals and attachments |
-| PATCH | `/inspections/:id` | Title, summary, notes, status |
+| POST | `/inspections` | `scope` (`station` / `train` / `section`), `from_time`, `to_time`, `joint_with`. Opens the full sheet unless `open_sheet: false`; `client_uuid` makes it idempotent |
+| GET | `/inspections/:id` | With its areas, item results, observations, approvals and attachments |
+| PATCH | `/inspections/:id` | Title, summary, general remarks, times, notes, status |
 | GET | `/inspections/:id/summary` | Generated narrative summary and statistics |
 | POST | `/inspections/:id/complete` | Optional remarks and digital signature |
 | POST | `/inspections/:id/approve` | Officer counter-signature |
+
+### The inspection sheet
+
+One inspector attends to many areas - often every area - of a station in a single
+visit, so the inspection is the unit of record and the areas sit inside it.
+
+| Method | Path | Notes |
+| --- | --- | --- |
+| GET | `/inspections/:id/sheet` | Every area with its result, the items recorded in it, the deficiencies raised in it and the catalogue still available to tick off |
+| GET | `/inspections/:id/areas/available` | The areas this location offers, whether or not they are on the sheet |
+| POST | `/inspections/:id/sheet` | Puts areas on the sheet. With no `unit_ids` the whole station goes on |
+| PATCH | `/inspections/:id/areas/:areaId` | `result` is `satisfactory`, `deficiencies`, `not_inspected` or `not_available`, plus `remarks` |
+| POST | `/inspections/:id/areas/:areaId/items` | `results: [{item_id, result: ok \| deficient \| not_applicable, remarks, parameters}]` |
+| GET | `/inspections/:id/previous` | What the previous inspection of this place left outstanding, with this visit's review of each |
+| POST | `/inspections/:id/previous/:observationId` | `finding` is `complied`, `partially_complied`, `not_complied` or `dropped`. Complied is verification on the ground, so it closes the observation; not complied on a submitted compliance reopens it. Neither ever rewords the observation |
+| GET | `/inspections/:id/report` | The whole report model: coverage, Parts I to V, statistics and signatures |
+| POST | `/inspections/:id/issue` | Issues the report, giving it its financial-year office number. Refused before the inspection is completed, and refused twice |
+
+Recording a deficiency marks its area and its item automatically, so the inspector
+never says it twice. An area carrying a live observation cannot be marked in order;
+cancelling the last one puts the area back to what it is. Once the report is issued
+the sheet behind it is frozen, while the status of every observation it cites still
+reads live.
 
 ## Observations
 
@@ -123,7 +146,8 @@ Booleans accept `1/0`, `true/false`, `yes/no`, `on/off`.
 | GET | `/compliance/awaiting-verification` | The inspecting officer's queue |
 | GET | `/compliance` | Compliance register with verification outcomes |
 | GET | `/dashboard/overview` | Key metrics and compliance performance |
-| GET | `/dashboard/home` | Compact payload for the home screen |
+| GET | `/dashboard/home` | Compact payload for the home screen, including any inspection still in progress |
+| GET | `/dashboard/inspections` | Inspection-wise: visits, coverage, areas attended to and items checked, by officer and by module |
 | GET | `/dashboard/modules` | Module-wise statistics |
 | GET | `/dashboard/departments` | Department-wise workload and closure time |
 | GET | `/dashboard/stations` | Station-wise, with the module split |
@@ -140,13 +164,20 @@ Booleans accept `1/0`, `true/false`, `yes/no`, `on/off`.
 
 `GET /reports/<type>?format=json|csv|xlsx|pdf` where `<type>` is `pending`, `overdue`, `critical`,
 `compliance`, `department-wise`, `station-wise`, `repeated-deficiency`, `module-wise`,
-`observations` or `audit`. Filters: `from`, `to`, `module_id`, `station_id`, `division_id`,
-`department_id`, `severity_id`, `status`, `q`, `days`, `limit`.
+`inspection-register`, `inspector-wise`, `observations` or `audit`. Filters: `from`, `to`,
+`module_id`, `station_id`, `division_id`, `department_id`, `severity_id`, `status`, `q`, `days`,
+`limit`; the inspection-based reports also take `inspector_id` and `scope`.
+
+Two of them are built on the inspection rather than on the observation. Everything else counts
+observations, which answers what is wrong and who has to fix it; these answer the other half -
+what inspection work was done, and how much of each station it reached.
 
 | Method | Path | Notes |
 | --- | --- | --- |
 | GET | `/reports/catalogue` | The report list the UI renders |
-| GET | `/reports/inspection/:id` | Full inspection report; the PDF carries photographs, signatures and a QR code |
+| GET | `/reports/inspection/:id` | One inspection in full - Part I the previous inspection's outstanding items, Part II the areas covered, Part III the deficiencies with responsibility and TDC, Part IV what was checked and found in order, Part V general remarks. The PDF carries the photographic annexure, the signatures and a QR code; the CSV stacks the parts; the Excel file gives each a sheet |
+| GET | `/reports/inspection-register` | One row per inspection, never one per area: date, location, officer, areas on the sheet, areas attended to, coverage, items checked, deficiencies and whether the report has been issued |
+| GET | `/reports/inspector-wise` | The same visits summed by the officer who made them, with average coverage and closure rate |
 | GET | `/reports/verify/:token` | **Public** QR verification |
 
 ## Inspection notes

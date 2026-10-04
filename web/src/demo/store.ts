@@ -29,7 +29,8 @@ const TABLES = [
   'contractors', 'tdc_rules', 'notification_rules', 'escalation_levels',
   'settings', 'supervisors', 'supervisor_coverage', 'supervisor_stations',
   'supervisor_departments', 'item_deficiencies', 'users',
-  'inspections', 'observations', 'attachments', 'compliances',
+  'inspections', 'inspection_areas', 'inspection_item_results',
+  'inspection_previous_reviews', 'observations', 'attachments', 'compliances',
   'inspection_notes', 'inspection_note_observations',
   'observation_events', 'approvals', 'notifications', 'notification_deliveries',
   'audit_log',
@@ -185,8 +186,32 @@ export function viewInspection(i: Row): Row {
   const train = byId('trains', i.train_id);
   const inspector = byId('users', i.inspector_id);
   const observations = where('observations', (o) => o.inspection_id === i.id);
+  // An inspection is one visit over many areas, so how much of the place it
+  // covered is a property of the inspection. The server computes these in its
+  // view; they are computed here so that no screen can tell the two apart.
+  const areas = where('inspection_areas', (a) => a.inspection_id === i.id);
+  const items = where('inspection_item_results', (r) => r.inspection_id === i.id);
+  const reviews = where('inspection_previous_reviews', (r) => r.inspection_id === i.id);
+  const covered = areas.filter((a) => a.result === 'satisfactory' || a.result === 'deficiencies');
+  const available = areas.filter((a) => a.result !== 'not_available');
+  const previous = byId('inspections', i.previous_inspection_id);
   return {
     ...i,
+    areas_on_sheet: areas.length,
+    areas_covered: covered.length,
+    areas_satisfactory: areas.filter((a) => a.result === 'satisfactory').length,
+    areas_with_deficiencies: areas.filter((a) => a.result === 'deficiencies').length,
+    areas_not_inspected: areas.filter((a) => a.result === 'not_inspected').length,
+    areas_not_available: areas.length - available.length,
+    coverage_pct: available.length ? Math.round((covered.length / available.length) * 100) : null,
+    items_checked: items.length,
+    items_ok: items.filter((r) => r.result === 'ok').length,
+    items_deficient: items.filter((r) => r.result === 'deficient').length,
+    previous_reviewed: reviews.length,
+    previous_complied: reviews.filter((r) => r.finding === 'complied').length,
+    previous_outstanding: reviews.filter((r) => ['not_complied', 'partially_complied'].includes(r.finding)).length,
+    previous_ref_no: previous?.ref_no ?? null,
+    previous_started_at: previous?.started_at ?? null,
     module_code: module?.code ?? '',
     module_name: module?.name ?? '',
     module_accent: module?.accent ?? null,

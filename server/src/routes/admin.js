@@ -68,7 +68,7 @@ const RESOURCES = {
   },
   modules: { table: 'modules', label: 'Module', columns: ['code', 'name', 'tagline', 'description', 'accent', 'sort_order', 'active'], order: 'sort_order' },
   inspection_types: { table: 'inspection_types', label: 'Inspection type', columns: ['name', 'module_id', 'sort_order', 'active'], order: 'sort_order, name' },
-  item_groups: { table: 'item_groups', label: 'Item group', columns: ['module_id', 'name', 'sort_order', 'active'], order: 'module_id, sort_order' },
+  item_groups: { table: 'item_groups', label: 'Item group', columns: ['module_id', 'name', 'applies_to_kinds', 'sort_order', 'active'], order: 'module_id, sort_order' },
   inspection_items: {
     table: 'inspection_items',
     label: 'Inspection item',
@@ -109,6 +109,9 @@ const RESOURCES = {
     columns: ['supervisor_id', 'station_id', 'unit_id', 'unit_kind', 'item_group_id', 'priority', 'active'],
     order: 'priority',
   },
+  inspection_areas: { table: 'inspection_areas', label: 'Inspection area (sheet row)', columns: ['inspection_id', 'unit_id', 'unit_name', 'unit_kind', 'coach', 'result', 'remarks', 'sort_order'], order: 'inspection_id DESC, sort_order' },
+  inspection_item_results: { table: 'inspection_item_results', label: 'Inspection item result', columns: ['inspection_id', 'inspection_area_id', 'unit_id', 'item_id', 'item_name', 'group_name', 'result', 'remarks', 'observation_id'], order: 'inspection_id DESC, id' },
+  inspection_previous_reviews: { table: 'inspection_previous_reviews', label: 'Previous-inspection review', columns: ['inspection_id', 'observation_id', 'finding', 'remarks', 'reviewed_by'], order: 'inspection_id DESC, id' },
   item_deficiencies: {
     table: 'item_deficiencies',
     label: 'Suggested deficiency',

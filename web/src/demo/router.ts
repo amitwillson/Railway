@@ -235,7 +235,10 @@ interface Route { method: string; pattern: RegExp; handler: Handler; anonymous?:
 
 const routes: Route[] = [];
 const on = (method: string, path: string, handler: Handler, anonymous = false) => {
-  const pattern = new RegExp(`^${path.replace(/:[a-z_]+/g, '([^/]+)')}$`);
+  // Parameter names are spelled as the server spells them, which includes camel
+  // case (:areaId, :observationId) - a lowercase-only pattern would leave the
+  // rest of the name in the regex as literal text and the route would never match.
+  const pattern = new RegExp(`^${path.replace(/:[A-Za-z_][A-Za-z0-9_]*/g, '([^/]+)')}$`);
   routes.push({ method, pattern, handler, anonymous });
 };
 
@@ -700,6 +703,319 @@ on('GET', '/masters/contractors', ({ q }) => {
 });
 
 
+/* --------------------------- the inspection sheet -------------------------- */
+
+/**
+ * The sheet: one inspection, many areas. This mirrors server/src/lib/
+ * inspectionSheet.js exactly, so what the offline file records is what the
+ * deployed application records.
+ */
+
+const AREA_RESULTS = ['satisfactory', 'deficiencies', 'not_inspected', 'not_available'];
+const COVERED_RESULTS = ['satisfactory', 'deficiencies'];
+
+const scopeOf = (inspection: Row): string =>
+  inspection.scope ?? (inspection.train_id ? 'train' : inspection.station_id ? 'station' : 'section');
+
+/** Every area this inspection could cover, in inspection order. */
+const availableAreasFor = (inspection: Row): Row[] => {
+  const scope = scopeOf(inspection);
+  return unitsFor(scope === 'station' ? inspection.station_id : undefined, scope === 'train' ? 'train' : 'station');
+};
+
+const sortedAreas = (inspectionId: number): Row[] =>
+  where('inspection_areas', (a) => a.inspection_id === inspectionId).sort(
+    (a, b) => (a.sort_order ?? 100) - (b.sort_order ?? 100) || String(a.unit_name).localeCompare(String(b.unit_name))
+  );
+
+/**
+ * Puts areas on the sheet, each starting at "not inspected". "Other" is the
+ * catch-all for somewhere the master list does not name, so it stays off a full
+ * sheet unless it is asked for by name.
+ */
+function openSheet(inspectionId: number, unitIds: number[] | null = null, coach: string | null = null) {
+  const inspection = byId('inspections', inspectionId);
+  if (!inspection) throw notFound('Inspection');
+  const areas = availableAreasFor(inspection);
+  const wanted = unitIds
+    ? areas.filter((u) => unitIds.includes(u.id))
+    : areas.filter((u) => String(u.kind ?? '').toLowerCase() !== 'other');
+  if (unitIds && wanted.length !== unitIds.length) {
+    throw bad('One or more of those areas do not belong to this location');
+  }
+  const existing = new Set(
+    where('inspection_areas', (a) => a.inspection_id === inspectionId).map((a) => `${a.unit_id}|${a.coach ?? ''}`)
+  );
+  let added = 0;
+  for (const unit of wanted) {
+    if (existing.has(`${unit.id}|${coach ?? ''}`)) continue;
+    insert('inspection_areas', {
+      inspection_id: inspectionId,
+      unit_id: unit.id,
+      unit_name: unit.name,
+      unit_kind: unit.kind ?? null,
+      coach,
+      result: 'not_inspected',
+      remarks: null,
+      sort_order: unit.sort_order ?? 100,
+      inspected_at: null,
+      created_at: nowIso(),
+      updated_at: null,
+    });
+    added += 1;
+  }
+  return { added, total: existing.size + added };
+}
+
+/** Records the inspector's finding for one area. */
+function setAreaResult(areaId: number, changes: { result?: string; remarks?: string }) {
+  const area = byId('inspection_areas', areaId);
+  if (!area) throw notFound('Inspection area');
+  if (changes.result && !AREA_RESULTS.includes(changes.result)) throw bad('Unknown area result');
+  // An area with an observation against it is deficient as a matter of fact.
+  const live = where(
+    'observations',
+    (o) => o.inspection_area_id === areaId && o.status !== 'cancelled'
+  ).length;
+  if (live > 0 && changes.result && changes.result !== 'deficiencies') {
+    throw bad(
+      `${area.unit_name} carries ${live} observation(s); cancel them before marking it ${changes.result.replace('_', ' ')}`
+    );
+  }
+  const next: Row = { updated_at: nowIso() };
+  if (changes.remarks !== undefined) next.remarks = changes.remarks;
+  if (changes.result) {
+    next.result = changes.result;
+    next.inspected_at = COVERED_RESULTS.includes(changes.result) ? area.inspected_at ?? nowIso() : null;
+  }
+  update('inspection_areas', areaId, next);
+  return byId('inspection_areas', areaId)!;
+}
+
+/** Marks the area an observation was raised in, adding it to the sheet if needed. */
+function markAreaDeficient(observation: Row): number | null {
+  if (!observation?.inspection_id) return null;
+  let areaId: number | null = observation.inspection_area_id ?? null;
+  if (!areaId && observation.unit_id) {
+    const found = where(
+      'inspection_areas',
+      (a) =>
+        a.inspection_id === observation.inspection_id &&
+        a.unit_id === observation.unit_id &&
+        (a.coach ?? null) === (observation.coach ?? null)
+    )[0];
+    if (found) {
+      areaId = found.id;
+    } else {
+      const unit = byId('units', observation.unit_id);
+      areaId = insert('inspection_areas', {
+        inspection_id: observation.inspection_id,
+        unit_id: observation.unit_id,
+        unit_name: observation.unit_name ?? unit?.name ?? 'Area',
+        unit_kind: unit?.kind ?? null,
+        coach: observation.coach ?? null,
+        result: 'not_inspected',
+        remarks: null,
+        sort_order: unit?.sort_order ?? 100,
+        inspected_at: null,
+        created_at: nowIso(),
+        updated_at: null,
+      }).id;
+    }
+    update('observations', observation.id, { inspection_area_id: areaId });
+  }
+  if (!areaId) return null;
+  const area = byId('inspection_areas', areaId)!;
+  update('inspection_areas', areaId, {
+    result: 'deficiencies',
+    inspected_at: area.inspected_at ?? nowIso(),
+    updated_at: nowIso(),
+  });
+  return areaId;
+}
+
+/** Puts an area back to what it is after its last live observation was cancelled. */
+function refreshAreaResult(areaId: number): string | null {
+  const area = byId('inspection_areas', areaId);
+  if (!area) return null;
+  const live = where('observations', (o) => o.inspection_area_id === areaId && o.status !== 'cancelled').length;
+  if (live > 0) {
+    if (area.result !== 'deficiencies') update('inspection_areas', areaId, { result: 'deficiencies', updated_at: nowIso() });
+    return 'deficiencies';
+  }
+  if (area.result !== 'deficiencies') return area.result;
+  const checked = where('inspection_item_results', (r) => r.inspection_area_id === areaId).length;
+  const result = checked > 0 ? 'satisfactory' : 'not_inspected';
+  update('inspection_areas', areaId, {
+    result,
+    inspected_at: result === 'satisfactory' ? area.inspected_at ?? nowIso() : null,
+    updated_at: nowIso(),
+  });
+  return result;
+}
+
+/** Records what was checked inside an area and how it was found. */
+function recordItemResults(inspectionId: number, areaId: number, entries: Row[]) {
+  const area = where('inspection_areas', (a) => a.id === areaId && a.inspection_id === inspectionId)[0];
+  if (!area) throw notFound('Inspection area');
+  const saved: Row[] = [];
+  for (const entry of entries) {
+    const result = entry.result ?? 'ok';
+    if (!['ok', 'deficient', 'not_applicable'].includes(result)) throw bad('Unknown item result');
+    const item = entry.item_id ? byId('inspection_items', entry.item_id) : undefined;
+    if (entry.item_id && !item) throw bad('Unknown inspection item');
+    const row: Row = {
+      inspection_id: inspectionId,
+      inspection_area_id: areaId,
+      unit_id: area.unit_id,
+      item_id: entry.item_id ?? null,
+      item_name: item?.name ?? entry.item_name ?? 'Item',
+      group_name: item ? byId('item_groups', item.group_id)?.name ?? null : null,
+      result,
+      parameters: entry.parameters ? JSON.stringify(entry.parameters) : null,
+      remarks: entry.remarks ?? null,
+      observation_id: entry.observation_id ?? null,
+      recorded_at: nowIso(),
+    };
+    const existing = where(
+      'inspection_item_results',
+      (r) => r.inspection_id === inspectionId && r.inspection_area_id === areaId && r.item_id === (entry.item_id ?? null)
+    )[0];
+    saved.push(existing ? update('inspection_item_results', existing.id, row)! : insert('inspection_item_results', row));
+  }
+  // An area where something was checked has been attended to; it only becomes
+  // satisfactory on its own if nothing was found wrong there.
+  if (area.result === 'not_inspected') {
+    update('inspection_areas', areaId, {
+      result: entries.some((e) => e.result === 'deficient') ? 'deficiencies' : 'satisfactory',
+      inspected_at: nowIso(),
+      updated_at: nowIso(),
+    });
+  }
+  return saved;
+}
+
+/** Whether an item group belongs in an area of this kind. */
+const groupCovers = (group: Row, kind: string) => {
+  const list = String(group.applies_to_kinds ?? '')
+    .split(',')
+    .map((k) => k.trim().toLowerCase())
+    .filter(Boolean);
+  if (list.length === 0 || !kind) return true;
+  return list.includes(kind);
+};
+
+/** The item catalogue offered inside one area, grouped as the catalogue is. */
+function itemsForArea(inspection: Row, area: Row) {
+  const scope = scopeOf(inspection);
+  const kind = String(area?.unit_kind ?? '').toLowerCase();
+  const groups = where('item_groups', (g) => g.active !== 0 && g.module_id === inspection.module_id)
+    .filter((g) => groupCovers(g, kind))
+    .sort((a, b) => (a.sort_order ?? 100) - (b.sort_order ?? 100));
+  const wanted = scope === 'train' ? 'train' : 'station';
+  return groups
+    .map((g) => ({
+      group_id: g.id,
+      group_name: g.name,
+      items: where(
+        'inspection_items',
+        (i) => i.active !== 0 && i.group_id === g.id && (i.applies_to === wanted || i.applies_to === 'both')
+      )
+        .sort((a, b) => (a.sort_order ?? 100) - (b.sort_order ?? 100) || String(a.name).localeCompare(String(b.name)))
+        .map(itemView),
+    }))
+    .filter((g) => g.items.length > 0);
+}
+
+/** The whole sheet: every area with its result, items, deficiencies and catalogue. */
+function sheetFor(inspectionId: number, catalogue = true) {
+  const inspection = byId('inspections', inspectionId);
+  if (!inspection) throw notFound('Inspection');
+  const view = viewInspection(inspection);
+  const areas = sortedAreas(inspectionId);
+  const results = where('inspection_item_results', (r) => r.inspection_id === inspectionId);
+  const observations = where('observations', (o) => o.inspection_id === inspectionId).map(viewObservation);
+  const onSheet = new Set(areas.map((a) => a.unit_id));
+  return {
+    inspection: view,
+    areas: areas.map((area) => ({
+      ...area,
+      item_results: results.filter((r) => r.inspection_area_id === area.id),
+      observations: observations.filter(
+        (o) => o.inspection_area_id === area.id || (o.inspection_area_id == null && o.unit_id === area.unit_id)
+      ),
+      catalogue: catalogue ? itemsForArea(inspection, area) : undefined,
+    })),
+    unplaced_observations: observations.filter(
+      (o) => !areas.some((a) => a.id === o.inspection_area_id || a.unit_id === o.unit_id)
+    ),
+    available_areas: availableAreasFor(inspection)
+      .filter((u) => !onSheet.has(u.id))
+      .map((u) => ({ id: u.id, name: u.name, kind: u.kind, sort_order: u.sort_order })),
+    coverage: coverageOf(view),
+  };
+}
+
+const coverageOf = (view: Row) => ({
+  areas_on_sheet: view.areas_on_sheet ?? 0,
+  areas_covered: view.areas_covered ?? 0,
+  areas_satisfactory: view.areas_satisfactory ?? 0,
+  areas_with_deficiencies: view.areas_with_deficiencies ?? 0,
+  areas_not_inspected: view.areas_not_inspected ?? 0,
+  areas_not_available: view.areas_not_available ?? 0,
+  coverage_pct: view.coverage_pct ?? null,
+  items_checked: view.items_checked ?? 0,
+  items_ok: view.items_ok ?? 0,
+  items_deficient: view.items_deficient ?? 0,
+});
+
+/** The inspection that last covered this place, found by location not by officer. */
+function findPreviousInspection(inspection: Row): Row | null {
+  const when = inspection.started_at ?? inspection.created_at ?? nowIso();
+  const matches = table('inspections').filter((i) => {
+    if (i.id === inspection.id || i.status === 'cancelled') return false;
+    if (inspection.station_id) {
+      if (i.station_id !== inspection.station_id) return false;
+    } else if (inspection.train_id) {
+      if (i.train_id !== inspection.train_id) return false;
+    } else if (inspection.section) {
+      if (i.section !== inspection.section) return false;
+    } else {
+      return false;
+    }
+    return String(i.started_at ?? i.created_at) < String(when);
+  });
+  matches.sort((a, b) => String(b.started_at ?? b.created_at).localeCompare(String(a.started_at ?? a.created_at)) || b.id - a.id);
+  return matches[0] ?? null;
+}
+
+function linkPreviousInspection(inspectionId: number): number | null {
+  const inspection = byId('inspections', inspectionId);
+  if (!inspection) throw notFound('Inspection');
+  if (inspection.previous_inspection_id) return inspection.previous_inspection_id;
+  const previous = findPreviousInspection(inspection);
+  if (!previous) return null;
+  update('inspections', inspectionId, { previous_inspection_id: previous.id, updated_at: nowIso() });
+  return previous.id;
+}
+
+/** What the previous inspection of this place left outstanding. */
+function previousOutstanding(inspectionId: number) {
+  const inspection = byId('inspections', inspectionId);
+  if (!inspection) throw notFound('Inspection');
+  const previousId = inspection.previous_inspection_id ?? findPreviousInspection(inspection)?.id ?? null;
+  if (!previousId) return { previous: null, items: [] };
+  const reviews = where('inspection_previous_reviews', (r) => r.inspection_id === inspectionId);
+  const items = where(
+    'observations',
+    (o) => o.inspection_id === previousId && !['closed', 'cancelled'].includes(o.status)
+  )
+    .map(viewObservation)
+    .sort((a, b) => a.severity_rank - b.severity_rank || a.id - b.id)
+    .map((o) => ({ ...o, review: reviews.find((r) => r.observation_id === o.id) ?? null }));
+  return { previous: viewInspection(byId('inspections', previousId)!), items };
+}
+
 /* ----------------------------- inspections -------------------------------- */
 
 on('GET', '/inspections', ({ q, user }) => {
@@ -738,6 +1054,8 @@ on('GET', '/inspections/:id', ({ params, user }) => {
   if (!inspection) throw notFound('Inspection');
   return {
     ...viewInspection(inspection),
+    areas: sortedAreas(inspection.id),
+    item_results: where('inspection_item_results', (r) => r.inspection_id === inspection.id),
     observations: where('observations', (o) => o.inspection_id === inspection.id).map(viewObservation),
     approvals: where('approvals', (a) => a.entity_type === 'inspection' && a.entity_id === inspection.id),
     attachments: where('attachments', (a) => a.inspection_id === inspection.id && !a.observation_id),
@@ -758,11 +1076,14 @@ on('POST', '/inspections', ({ body, user }) => {
   if (!module) throw bad('Unknown inspection module');
   if (!type) throw bad('Unknown inspection type');
 
+  const scope: string = body.scope ?? (body.train_id ? 'train' : body.station_id ? 'station' : 'section');
   const created = insert('inspections', {
     ref_no: nextRefFor('inspections', 'INSP'),
+    inspection_no: null,
     module_id: body.module_id,
     inspection_type_id: body.inspection_type_id,
-    location_type: body.location_type,
+    scope,
+    location_type: body.location_type ?? (scope === 'train' ? 'Train' : scope === 'section' ? 'Other' : 'Station'),
     station_id: body.station_id ?? null,
     train_id: body.train_id ?? null,
     section: body.section ?? null,
@@ -772,17 +1093,27 @@ on('POST', '/inspections', ({ body, user }) => {
     planned_date: body.planned_date ?? null,
     started_at: nowIso(),
     completed_at: null,
+    from_time: body.from_time ?? null,
+    to_time: body.to_time ?? null,
+    previous_inspection_id: null,
     status: 'in_progress',
+    report_status: 'draft',
+    report_issued_at: null,
+    report_issued_by: null,
     summary: null,
     auto_summary: null,
+    general_remarks: null,
     notes: body.notes ?? null,
     qr_token: uuid().slice(0, 20),
     client_uuid: body.client_uuid ?? null,
     created_at: nowIso(),
     updated_at: null,
   });
+  linkPreviousInspection(created.id);
+  // An inspector who attends to every area gets every area on the sheet.
+  const opened = body.open_sheet === false ? { added: 0 } : openSheet(created.id);
   audit({ action: 'INSPECTION_CREATE', entityType: 'inspection', entityId: created.id, user, next: created });
-  return viewInspection(created);
+  return { ...viewInspection(created), sheet_opened: opened.added };
 });
 
 on('PATCH', '/inspections/:id', ({ params, body, user }) => {
@@ -850,6 +1181,384 @@ function buildSummary(inspectionId: number) {
     },
   };
 }
+
+/* ----------------------------- the report model ---------------------------- */
+
+/**
+ * The inspection report, assembled from the inspection on demand - exactly as
+ * server/src/lib/inspectionReport.js does it, so the offline file and the
+ * deployed application cannot disagree about what a report says.
+ */
+
+const setting = (key: string, fallback: string) =>
+  table('settings').find((r) => r.key === key)?.value ?? fallback;
+
+const reportDefaults = () => ({
+  letterhead: setting('report.letterhead', setting('note.letterhead', 'SOUTH EAST CENTRAL RAILWAY\nBilaspur Division')),
+  office: setting('report.office', setting('note.office', 'Sr. Divisional Commercial Manager, Bilaspur')),
+  number_prefix: setting('report.number_prefix', 'BSP/COM/SI'),
+  submitted_to: setting('report.submitted_to', 'Sr. Divisional Commercial Manager, Bilaspur'),
+  copy_to: setting(
+    'report.copy_to',
+    'Concerned Branch Officers and Supervisors - for necessary action on the observations listed at Part III.'
+  ),
+  closing: setting(
+    'report.closing',
+    'The observations at Part III have been advised to the concerned departments through the inspection '
+      + 'management system with the target dates shown against each. Compliance may please be advised within '
+      + 'the target date.'
+  ),
+});
+
+/** Financial-year serial, restarting each April as the office series does. */
+function nextInspectionNo(prefix = reportDefaults().number_prefix, date = todayIso()) {
+  const [y, m] = date.split('-').map(Number);
+  const startYear = m >= 4 ? y : y - 1;
+  const fy = `${startYear}-${String((startYear + 1) % 100).padStart(2, '0')}`;
+  const like = `${prefix}/${fy}/`;
+  const last = table('inspections')
+    .map((i) => String(i.inspection_no ?? ''))
+    .filter((n) => n.startsWith(like))
+    .map((n) => Number.parseInt(n.split('/').pop() ?? '0', 10))
+    .reduce((max, n) => Math.max(max, Number.isFinite(n) ? n : 0), 0);
+  return `${like}${String(last + 1).padStart(3, '0')}`;
+}
+
+const AREA_RESULT_LABELS: Record<string, string> = {
+  satisfactory: 'Found in order',
+  deficiencies: 'Deficiencies noticed',
+  not_inspected: 'Not inspected',
+  not_available: 'Not available / closed',
+};
+
+const FINDING_LABELS: Record<string, string> = {
+  complied: 'Complied',
+  partially_complied: 'Partially complied',
+  not_complied: 'Not complied',
+  dropped: 'Dropped',
+};
+
+const placeOfInspection = (view: Row) => {
+  if (view.station_name) return { preposition: 'at', name: `${view.station_name} (${view.station_code})` };
+  if (view.train_number) {
+    return { preposition: 'on', name: `Train ${view.train_number}${view.train_name ? ` ${view.train_name}` : ''}` };
+  }
+  if (view.section) return { preposition: 'on', name: `${view.section} section` };
+  return { preposition: 'at', name: '-' };
+};
+
+/**
+ * The opening paragraph, written from the coverage first and the deficiencies
+ * second - so an inspection that found a station in good order reads as an
+ * inspection and not as an empty page.
+ */
+function narrativeFor(view: Row, byArea: Row[], observations: Row[], previous: { previous: Row | null; items: Row[] }) {
+  const place = placeOfInspection(view);
+  const coverage = coverageOf(view);
+  const date = String(view.started_at ?? view.created_at ?? '').slice(0, 10);
+  const time = view.from_time
+    ? view.to_time ? ` from ${view.from_time} to ${view.to_time} hrs` : ` at ${view.from_time} hrs`
+    : '';
+  const parts = [
+    `${view.inspection_type_name} ${place.preposition} ${place.name} was carried out by ${view.inspector_name}`
+      + `${view.inspector_designation ? `, ${view.inspector_designation}` : ''} on ${date}${time}.`,
+  ];
+  if (view.joint_with) parts.push(`Accompanied by ${view.joint_with}.`);
+
+  if (coverage.areas_covered > 0) {
+    const denominator = coverage.areas_on_sheet - coverage.areas_not_available;
+    parts.push(
+      `${coverage.areas_covered} of ${denominator} area(s) were attended to`
+        + `${coverage.coverage_pct != null ? ` (${coverage.coverage_pct}% of the station)` : ''}: `
+        + `${coverage.areas_satisfactory} found in order and ${coverage.areas_with_deficiencies} with deficiencies.`
+    );
+    if (coverage.areas_not_inspected > 0) {
+      parts.push(`${coverage.areas_not_inspected} area(s) could not be attended to on this visit.`);
+    }
+  }
+  if (coverage.items_checked > 0) {
+    parts.push(`${coverage.items_checked} item(s) were checked, of which ${coverage.items_ok} were found in order.`);
+  }
+
+  if (observations.length === 0) {
+    parts.push('No deficiency was noticed during this inspection.');
+  } else {
+    const bySeverity: Record<string, number> = {};
+    const byDepartment: Record<string, number> = {};
+    for (const o of observations) {
+      bySeverity[o.severity_name] = (bySeverity[o.severity_name] ?? 0) + 1;
+      byDepartment[o.department_name] = (byDepartment[o.department_name] ?? 0) + 1;
+    }
+    parts.push(
+      `${observations.length} deficiency(ies) were recorded `
+        + `(${Object.entries(bySeverity).map(([k, v]) => `${v} ${k}`).join(', ')}), with action advised to `
+        + `${Object.entries(byDepartment).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k} (${v})`).join(', ')}.`
+    );
+    const repeated = observations.filter((o) => o.repeat_count > 0);
+    if (repeated.length) {
+      parts.push(
+        repeated.length === 1
+          ? 'One of them is a repeated deficiency and needs sustained attention by the concerned department.'
+          : `${repeated.length} of them are repeated deficiencies and need sustained attention by the concerned department.`
+      );
+    }
+    const areasWith = byArea.filter((a) => (a.observations as Row[]).length > 0).map((a) => a.unit_name);
+    if (areasWith.length) parts.push(`Deficiencies were noticed in: ${areasWith.join(', ')}.`);
+  }
+
+  if (previous.previous) {
+    const reviewed = previous.items.filter((i) => i.review);
+    const complied = reviewed.filter((i) => i.review.finding === 'complied');
+    const n = previous.items.length;
+    const cite = `The previous inspection (${previous.previous.ref_no}, `
+      + `${String(previous.previous.started_at ?? previous.previous.created_at ?? '').slice(0, 10)})`;
+    if (n === 0) {
+      parts.push(`${cite} left nothing outstanding.`);
+    } else {
+      parts.push(
+        `${cite} left ${n} item${n === 1 ? '' : 's'} outstanding`
+          + (reviewed.length
+            ? `; ${complied.length} of the ${reviewed.length} reviewed ${complied.length === 1 ? 'has' : 'have'} since been complied with.`
+            : `, which ${n === 1 ? 'is' : 'are'} listed at Part I for review.`)
+      );
+    }
+  }
+  return parts.join(' ');
+}
+
+function reportFor(inspectionId: number) {
+  const inspection = byId('inspections', inspectionId);
+  if (!inspection) throw notFound('Inspection');
+  const view = viewInspection(inspection);
+  const areas = sortedAreas(inspectionId);
+  const itemResults = where('inspection_item_results', (r) => r.inspection_id === inspectionId);
+  const observations = where('observations', (o) => o.inspection_id === inspectionId && o.status !== 'cancelled')
+    .map(viewObservation)
+    .sort((a, b) => a.severity_rank - b.severity_rank || a.id - b.id);
+  const previous = previousOutstanding(inspectionId);
+
+  const byArea: Row[] = areas.map((area) => {
+    const items = itemResults.filter((r) => r.inspection_area_id === area.id);
+    const found = observations.filter(
+      (o) => o.inspection_area_id === area.id || (o.inspection_area_id == null && o.unit_id === area.unit_id)
+    );
+    return {
+      ...area,
+      result_label: AREA_RESULT_LABELS[area.result] ?? area.result,
+      items,
+      items_ok: items.filter((r) => r.result === 'ok'),
+      items_deficient: items.filter((r) => r.result === 'deficient'),
+      items_na: items.filter((r) => r.result === 'not_applicable'),
+      observations: found,
+    };
+  });
+  const placed = new Set(byArea.flatMap((a) => (a.observations as Row[]).map((o) => o.id)));
+
+  const bySeverity: Record<string, number> = {};
+  const byDepartment: Record<string, number> = {};
+  for (const o of observations) {
+    bySeverity[o.severity_name] = (bySeverity[o.severity_name] ?? 0) + 1;
+    byDepartment[o.department_name] = (byDepartment[o.department_name] ?? 0) + 1;
+  }
+
+  return {
+    inspection: view,
+    defaults: reportDefaults(),
+    place: placeOfInspection(view),
+    coverage: coverageOf(view),
+    previous_inspection: previous.previous,
+    previous_items: previous.items.map((item) => ({
+      ...item,
+      finding_label: item.review ? FINDING_LABELS[item.review.finding] ?? item.review.finding : 'Not reviewed',
+    })),
+    areas: byArea,
+    areas_covered: byArea.filter((a) => a.result === 'satisfactory' || a.result === 'deficiencies'),
+    areas_not_covered: byArea.filter((a) => a.result === 'not_inspected' || a.result === 'not_available'),
+    observations,
+    unplaced_observations: observations.filter((o) => !placed.has(o.id)),
+    items_in_order: itemResults.filter((r) => r.result === 'ok'),
+    approvals: where('approvals', (a) => a.entity_type === 'inspection' && a.entity_id === inspectionId),
+    narrative: narrativeFor(view, byArea, observations, previous),
+    statistics: {
+      observations: observations.length,
+      by_severity: bySeverity,
+      by_department: byDepartment,
+      with_tdc: observations.filter((o) => o.tdc).length,
+      overdue: observations.filter((o) => o.is_overdue).length,
+      repeated: observations.filter((o) => o.repeat_count > 0).length,
+      closed: observations.filter((o) => o.status === 'closed').length,
+      open: observations.filter((o) => o.status !== 'closed').length,
+      critical: observations.filter((o) => o.severity_rank === 1).length,
+      coverage: coverageOf(view),
+      previous_outstanding: previous.items.length,
+      previous_reviewed: previous.items.filter((i) => i.review).length,
+      previous_complied: previous.items.filter((i) => i.review?.finding === 'complied').length,
+    },
+  };
+}
+
+/* ------------------------- sheet, review and report ------------------------ */
+
+/** Only the inspecting officer (or an officer) may write on an inspection. */
+function ownInspection(id: string | number, user: Row): Row {
+  const inspection = byId('inspections', id);
+  if (!inspection) throw notFound('Inspection');
+  if (inspection.inspector_id !== user.id && !isOfficer(user)) {
+    throw forbidden('Only the inspecting officer or a divisional officer can change this inspection');
+  }
+  if (inspection.report_status === 'issued') {
+    throw bad(`The report ${inspection.inspection_no} has been issued; this inspection is now a record`);
+  }
+  return inspection;
+}
+
+on('GET', '/inspections/:id/sheet', ({ params, q, user }) => {
+  require_(user, 'inspection:read');
+  return sheetFor(Number(params[0]), bool(q.get('catalogue')) !== false);
+});
+
+on('GET', '/inspections/:id/areas/available', ({ params, user }) => {
+  require_(user, 'inspection:read');
+  const inspection = byId('inspections', params[0]);
+  if (!inspection) throw notFound('Inspection');
+  return { data: availableAreasFor(inspection) };
+});
+
+on('POST', '/inspections/:id/sheet', ({ params, body, user }) => {
+  require_(user, 'inspection:update');
+  const inspection = ownInspection(params[0], user);
+  const result = openSheet(inspection.id, body?.unit_ids ?? null, body?.coach ?? null);
+  audit({ action: 'INSPECTION_SHEET_OPEN', entityType: 'inspection', entityId: inspection.id, user, next: result });
+  return { ...result, ...sheetFor(inspection.id, false) };
+});
+
+on('PATCH', '/inspections/:id/areas/:areaId', ({ params, body, user }) => {
+  require_(user, 'inspection:update');
+  const inspection = ownInspection(params[0], user);
+  const area = where('inspection_areas', (a) => a.id === Number(params[1]) && a.inspection_id === inspection.id)[0];
+  if (!area) throw notFound('Inspection area');
+  const previous = { area: area.unit_name, result: area.result };
+  const next = setAreaResult(area.id, body ?? {});
+  audit({
+    action: 'INSPECTION_AREA_RESULT', entityType: 'inspection', entityId: inspection.id, user,
+    previous, next: { area: next.unit_name, result: next.result },
+  });
+  return next;
+});
+
+on('POST', '/inspections/:id/areas/:areaId/items', ({ params, body, user }) => {
+  require_(user, 'inspection:update');
+  const inspection = ownInspection(params[0], user);
+  if (!Array.isArray(body?.results) || body.results.length === 0) throw bad('Record at least one item');
+  const saved = recordItemResults(inspection.id, Number(params[1]), body.results);
+  audit({
+    action: 'INSPECTION_ITEMS_RECORDED', entityType: 'inspection', entityId: inspection.id, user,
+    next: { area_id: Number(params[1]), items: saved.length },
+  });
+  return { data: saved };
+});
+
+on('GET', '/inspections/:id/previous', ({ params, user }) => {
+  require_(user, 'inspection:read');
+  return previousOutstanding(Number(params[0]));
+});
+
+/**
+ * The inspector's finding on an item the previous inspection left outstanding.
+ * It records this visit's position; it never edits the observation's wording.
+ * Where the department had already submitted its compliance, "complied" is the
+ * verification the workflow was waiting for.
+ */
+on('POST', '/inspections/:id/previous/:observationId', ({ params, body, user }) => {
+  require_(user, 'inspection:update');
+  const inspection = ownInspection(params[0], user);
+  const observation = byId('observations', params[1]);
+  if (!observation) throw notFound('Observation');
+  const finding = body?.finding;
+  if (!['complied', 'partially_complied', 'not_complied', 'dropped'].includes(finding)) {
+    throw bad('Unknown finding');
+  }
+  const existing = where(
+    'inspection_previous_reviews',
+    (r) => r.inspection_id === inspection.id && r.observation_id === observation.id
+  )[0];
+  const row = {
+    inspection_id: inspection.id,
+    observation_id: observation.id,
+    finding,
+    remarks: body?.remarks ?? null,
+    reviewed_by: user.id,
+    reviewed_at: nowIso(),
+  };
+  if (existing) update('inspection_previous_reviews', existing.id, row);
+  else insert('inspection_previous_reviews', row);
+
+  timeline(observation.id, {
+    action: 'REVIEWED_AT_INSPECTION',
+    from: observation.status,
+    to: observation.status,
+    actor: user,
+    remarks: `Reviewed during ${inspection.ref_no}: ${String(finding).replace('_', ' ')}${body?.remarks ? ` - ${body.remarks}` : ''}`,
+  });
+
+  let moved: string | null = null;
+  if (finding === 'complied' && !['closed', 'cancelled'].includes(observation.status)) {
+    const from = observation.status;
+    update('observations', observation.id, {
+      status: 'closed', verified_at: nowIso(), closed_at: nowIso(), closed_by: user.id, updated_at: nowIso(),
+    });
+    timeline(observation.id, {
+      action: 'CLOSED', from, to: 'closed', actor: user,
+      remarks: `Compliance verified on site during ${inspection.ref_no}`,
+    });
+    moved = 'closed';
+  } else if (finding === 'not_complied' && observation.status === 'compliance_submitted') {
+    update('observations', observation.id, {
+      status: 'reopened', reopen_count: (observation.reopen_count ?? 0) + 1, updated_at: nowIso(),
+    });
+    timeline(observation.id, {
+      action: 'REOPENED', from: 'compliance_submitted', to: 'reopened', actor: user,
+      remarks: `Found not complied on site during ${inspection.ref_no}`,
+    });
+    moved = 'reopened';
+  }
+
+  audit({
+    action: 'INSPECTION_PREVIOUS_REVIEW', entityType: 'inspection', entityId: inspection.id, user,
+    next: { observation: observation.ref_no, finding, moved },
+  });
+  return { ...previousOutstanding(inspection.id), observation: viewObservation(observation), moved };
+});
+
+on('GET', '/inspections/:id/report', ({ params, user }) => {
+  require_(user, 'inspection:read');
+  return reportFor(Number(params[0]));
+});
+
+on('POST', '/inspections/:id/issue', ({ params, user }) => {
+  require_(user, 'inspection:update');
+  const inspection = byId('inspections', params[0]);
+  if (!inspection) throw notFound('Inspection');
+  if (inspection.inspector_id !== user.id && !isOfficer(user)) {
+    throw forbidden('Only the inspecting officer or a divisional officer can issue this report');
+  }
+  if (inspection.status !== 'completed') throw bad('Complete the inspection before issuing its report');
+  if (inspection.report_status === 'issued') {
+    throw bad(`This report has already been issued as ${inspection.inspection_no}`);
+  }
+  update('inspections', inspection.id, {
+    inspection_no: inspection.inspection_no ?? nextInspectionNo(),
+    report_status: 'issued',
+    report_issued_at: nowIso(),
+    report_issued_by: user.id,
+    updated_at: nowIso(),
+  });
+  audit({
+    action: 'INSPECTION_REPORT_ISSUE', entityType: 'inspection', entityId: inspection.id, user,
+    next: { inspection_no: byId('inspections', inspection.id)!.inspection_no },
+  });
+  return viewInspection(byId('inspections', inspection.id)!);
+});
 
 on('GET', '/inspections/:id/summary', ({ params }) => {
   const summary = buildSummary(Number(params[0]));
@@ -1041,6 +1750,7 @@ on('POST', '/observations', ({ body, user }) => {
     closed_at: null,
     closed_by: null,
     client_uuid: body.client_uuid ?? uuid(),
+    inspection_area_id: body.inspection_area_id ?? null,
     created_at: nowIso(),
     updated_at: null,
   });
@@ -1058,6 +1768,15 @@ on('POST', '/observations', ({ body, user }) => {
       metadata: { assignment_mode: assignmentMode, supervisor_id: supervisorId },
     });
   }
+  // The sheet is the spine of the record, so a deficiency recorded in an area
+  // marks that area and that item without the inspector saying it twice.
+  const areaId = markAreaDeficient(created);
+  if (areaId && body.item_id) {
+    recordItemResults(inspection.id, areaId, [
+      { item_id: body.item_id, result: 'deficient', parameters: body.parameters ?? null, observation_id: created.id },
+    ]);
+  }
+
   const view = viewObservation(created);
   audit({
     action: 'OBSERVATION_CREATE', entityType: 'observation', entityId: created.id, user, next: view,
@@ -1470,6 +2189,8 @@ on('POST', '/observations/:id/cancel', ({ params, body, user }) => {
   const from = row.status;
   update('observations', row.id, { status: 'cancelled', cancel_reason: body.reason, updated_at: nowIso() });
   timeline(row.id, { action: 'CANCELLED', from, to: 'cancelled', actor: user, remarks: body.reason });
+  // The sheet must not keep reading "deficiencies" for a cancelled deficiency.
+  if (row.inspection_area_id) refreshAreaResult(row.inspection_area_id);
   audit({ action: 'OBSERVATION_CANCEL', entityType: 'observation', entityId: row.id, user, previous: { status: from }, next: { status: 'cancelled' }, remarks: body.reason });
   return viewObservation(row);
 });
@@ -1858,6 +2579,98 @@ on('GET', '/dashboard/supervisors', ({ q, user }) => {
   return { data };
 });
 
+/**
+ * The inspection-wise dashboard: visits, coverage and items checked. Everything
+ * else on the dashboard counts observations; this counts the inspecting itself.
+ */
+on('GET', '/dashboard/inspections', ({ q, user }) => {
+  const limit = num(q.get('limit')) ?? 12;
+  const visits = inspections().filter((i) => {
+    const moduleId = num(q.get('module_id'));
+    if (moduleId !== undefined && i.module_id !== moduleId) return false;
+    const code = q.get('module_code');
+    if (code && i.module_code !== code) return false;
+    const stationId = num(q.get('station_id'));
+    if (stationId !== undefined && i.station_id !== stationId) return false;
+    if (bool(q.get('mine')) === true && i.inspector_id !== user.id) return false;
+    const days = num(q.get('days'));
+    if (days !== undefined) {
+      const since = new Date(Date.now() - days * 86_400_000).toISOString().slice(0, 10);
+      if (dateOnly(i.started_at ?? i.created_at)! < since) return false;
+    }
+    const from = q.get('from');
+    if (from && dateOnly(i.started_at ?? i.created_at)! < from) return false;
+    const to = q.get('to');
+    if (to && dateOnly(i.started_at ?? i.created_at)! > to) return false;
+    return true;
+  });
+
+  const sum = (key: string) => visits.reduce((n, i) => n + (Number(i[key]) || 0), 0);
+  const denominator = sum('areas_on_sheet') - sum('areas_not_available');
+  const totals = {
+    inspections: visits.length,
+    completed: visits.filter((i) => i.status === 'completed').length,
+    in_progress: visits.filter((i) => i.status === 'in_progress').length,
+    reports_issued: visits.filter((i) => i.report_status === 'issued').length,
+    inspectors: new Set(visits.map((i) => i.inspector_id)).size,
+    locations: new Set(visits.map((i) => i.station_id ?? -i.train_id)).size,
+    areas_on_sheet: sum('areas_on_sheet'),
+    areas_covered: sum('areas_covered'),
+    areas_satisfactory: sum('areas_satisfactory'),
+    areas_with_deficiencies: sum('areas_with_deficiencies'),
+    areas_not_inspected: sum('areas_not_inspected'),
+    areas_not_available: sum('areas_not_available'),
+    items_checked: sum('items_checked'),
+    items_ok: sum('items_ok'),
+    observations: sum('observation_count'),
+    coverage_pct: denominator ? Math.round((sum('areas_covered') / denominator) * 100) : null,
+    observations_per_inspection: visits.length ? Number((sum('observation_count') / visits.length).toFixed(1)) : 0,
+    areas_per_inspection: visits.length ? Number((sum('areas_covered') / visits.length).toFixed(1)) : 0,
+  };
+
+  const byInspector = new Map<number, Row>();
+  for (const i of visits) {
+    if (!byInspector.has(i.inspector_id)) {
+      byInspector.set(i.inspector_id, {
+        inspector_id: i.inspector_id, inspector_name: i.inspector_name,
+        inspector_designation: i.inspector_designation ?? null,
+        inspections: 0, areas_covered: 0, items_checked: 0, observations: 0, last_inspection: null,
+      });
+    }
+    const row = byInspector.get(i.inspector_id)!;
+    row.inspections += 1;
+    row.areas_covered += i.areas_covered ?? 0;
+    row.items_checked += i.items_checked ?? 0;
+    row.observations += i.observation_count ?? 0;
+    const date = dateOnly(i.started_at ?? i.created_at);
+    if (!row.last_inspection || String(date) > String(row.last_inspection)) row.last_inspection = date;
+  }
+
+  const byModule = activeRows('modules')
+    .map((m) => {
+      const group = visits.filter((i) => i.module_id === m.id);
+      return {
+        module_id: m.id, module_code: m.code, module_name: m.name, module_accent: m.accent,
+        inspections: group.length,
+        areas_covered: group.reduce((n, i) => n + (i.areas_covered ?? 0), 0),
+        observations: group.reduce((n, i) => n + (i.observation_count ?? 0), 0),
+      };
+    })
+    .filter((m) => m.inspections > 0)
+    .sort((a, b) => b.inspections - a.inspections);
+
+  return {
+    totals,
+    by_inspector: [...byInspector.values()].sort(
+      (a, b) => b.inspections - a.inspections || b.areas_covered - a.areas_covered
+    ),
+    by_module: byModule,
+    recent: visits
+      .sort((a, b) => String(b.started_at ?? b.created_at).localeCompare(String(a.started_at ?? a.created_at)))
+      .slice(0, limit),
+  };
+});
+
 on('GET', '/dashboard/home', ({ user }) => {
   const all = filterObservations(new URLSearchParams(), user);
   const mine = filterObservations(new URLSearchParams('mine=1'), user);
@@ -1877,7 +2690,20 @@ on('GET', '/dashboard/home', ({ user }) => {
       overdue: all.filter((o) => o.is_overdue).length,
       critical_open: all.filter((o) => o.severity_rank === 1 && o.is_open).length,
       closed: all.filter((o) => o.status === 'closed').length,
+      // What this officer's inspecting actually covered, which a count of
+      // observations cannot show.
+      my_areas_covered: inspections()
+        .filter((i) => i.inspector_id === user.id)
+        .reduce((n, i) => n + (i.areas_covered ?? 0), 0),
+      my_items_checked: inspections()
+        .filter((i) => i.inspector_id === user.id)
+        .reduce((n, i) => n + (i.items_checked ?? 0), 0),
     },
+    // An inspection still in progress is resumable work, so it leads the screen.
+    active_inspection:
+      inspections()
+        .filter((i) => i.inspector_id === user.id && i.status === 'in_progress')
+        .sort((a, b) => String(b.started_at ?? b.created_at).localeCompare(String(a.started_at ?? a.created_at)))[0] ?? null,
     recent_observations: observations()
       .filter((o) => o.created_by === user.id || (supervisorId && o.supervisor_id === supervisorId))
       .sort((a, b) => String(b.observed_at).localeCompare(String(a.observed_at)))
@@ -2378,7 +3204,9 @@ on('GET', '/notes/:id/print', ({ params }) => noteView(params[0]));
 /* -------------------------------- reports --------------------------------- */
 
 const REPORT_CATALOGUE = [
-  { key: 'inspection', name: 'Inspection Report', path: '/api/reports/inspection/:id', description: 'Full record of one inspection with observations, evidence and signatures' },
+  { key: 'inspection', name: 'Inspection Report', path: '/api/reports/inspection/:id', description: 'One inspection in full: areas covered, items checked, deficiencies, previous-inspection review and signatures', entity: 'inspection' },
+  { key: 'inspection-register', name: 'Inspection Register', path: '/api/reports/inspection-register', description: 'One row per inspection - what inspection work was done, how much of each station was covered' },
+  { key: 'inspector-wise', name: 'Inspector-wise Report', path: '/api/reports/inspector-wise', description: 'Inspections, coverage and closure by the officer who carried them out' },
   { key: 'compliance', name: 'Compliance Report', path: '/api/reports/compliance', description: 'Action taken, compliance date, verification and closure' },
   { key: 'pending', name: 'Pending Report', path: '/api/reports/pending', description: 'Every observation awaiting compliance' },
   { key: 'overdue', name: 'Overdue Report', path: '/api/reports/overdue', description: 'Observations past their target date of compliance' },
@@ -2458,6 +3286,100 @@ const reportRows = (key: string, q: URLSearchParams, user: Row): { title: string
         commercial: group.filter((o) => o.module_code === 'CI').length,
         safe_running: group.filter((o) => o.module_code === 'SR').length,
       })).sort((a, b) => b.pending - a.pending),
+    };
+  }
+  // The reports whose unit is the inspection rather than the observation: one row
+  // per visit, and the same visits summed by the officer who made them.
+  if (key === 'inspection-register' || key === 'inspector-wise') {
+    const visits = inspections()
+      .filter((i) => {
+        const moduleId = num(q.get('module_id'));
+        if (moduleId !== undefined && i.module_id !== moduleId) return false;
+        const stationId = num(q.get('station_id'));
+        if (stationId !== undefined && i.station_id !== stationId) return false;
+        const inspectorId = num(q.get('inspector_id'));
+        if (inspectorId !== undefined && i.inspector_id !== inspectorId) return false;
+        if (bool(q.get('mine')) === true && i.inspector_id !== user.id) return false;
+        const from = q.get('from');
+        if (from && dateOnly(i.started_at ?? i.created_at)! < from) return false;
+        const to = q.get('to');
+        if (to && dateOnly(i.started_at ?? i.created_at)! > to) return false;
+        return true;
+      })
+      .map((i): Row => ({
+        ...i,
+        date: dateOnly(i.started_at ?? i.created_at),
+        time: i.from_time ? `${i.from_time}${i.to_time ? `-${i.to_time}` : ''}` : '',
+        place: i.station_name
+          ? `${i.station_name} (${i.station_code})`
+          : i.train_number
+            ? `${i.train_number} ${i.train_name ?? ''}`.trim()
+            : i.section ?? '-',
+        overdue_count: where('observations', (o) => o.inspection_id === i.id)
+          .map(viewObservation)
+          .filter((o) => o.is_overdue).length,
+      }))
+      .sort((a, b) => String(b.started_at ?? b.created_at).localeCompare(String(a.started_at ?? a.created_at)));
+
+    if (key === 'inspection-register') {
+      return {
+        title: 'Inspection Register',
+        rows: visits.map((i) => ({
+          report_no: i.inspection_no ?? '', inspection_id: i.ref_no, date: i.date, time: i.time,
+          location: i.place, scope: i.scope, module: i.module_name, type: i.inspection_type_name,
+          inspecting_officer: i.inspector_name, accompanied_by: i.joint_with ?? '',
+          areas_on_sheet: i.areas_on_sheet, attended_to: i.areas_covered,
+          in_order: i.areas_satisfactory, with_deficiencies: i.areas_with_deficiencies,
+          not_inspected: i.areas_not_inspected, coverage_pct: i.coverage_pct,
+          items_checked: i.items_checked, items_in_order: i.items_ok,
+          deficiencies: i.observation_count, open: i.open_count, overdue: i.overdue_count,
+          closed: i.closed_count, previous_inspection: i.previous_ref_no ?? '',
+          report: i.report_status, status: i.status,
+        })),
+      };
+    }
+
+    const by = new Map<number, Row>();
+    for (const i of visits) {
+      if (!by.has(i.inspector_id)) {
+        by.set(i.inspector_id, {
+          inspector_id: i.inspector_id, inspector_name: i.inspector_name,
+          inspector_designation: i.inspector_designation ?? '',
+          inspections: 0, locations: new Set<string>(), areas_available: 0, areas_covered: 0,
+          areas_satisfactory: 0, items_checked: 0, observations: 0, open: 0, overdue: 0,
+          closed: 0, reports_issued: 0, last_inspection: '',
+        });
+      }
+      const row = by.get(i.inspector_id)!;
+      row.inspections += 1;
+      row.locations.add(i.place);
+      row.areas_available += (i.areas_on_sheet ?? 0) - (i.areas_not_available ?? 0);
+      row.areas_covered += i.areas_covered ?? 0;
+      row.areas_satisfactory += i.areas_satisfactory ?? 0;
+      row.items_checked += i.items_checked ?? 0;
+      row.observations += i.observation_count ?? 0;
+      row.open += i.open_count ?? 0;
+      row.overdue += i.overdue_count ?? 0;
+      row.closed += i.closed_count ?? 0;
+      if (i.report_status === 'issued') row.reports_issued += 1;
+      if (String(i.date) > String(row.last_inspection)) row.last_inspection = i.date;
+    }
+    return {
+      title: 'Inspector-wise Report',
+      rows: [...by.values()]
+        .map((r) => ({
+          inspecting_officer: r.inspector_name, designation: r.inspector_designation,
+          inspections: r.inspections, locations: (r.locations as Set<string>).size,
+          areas_attended_to: r.areas_covered, areas_in_order: r.areas_satisfactory,
+          items_checked: r.items_checked,
+          avg_coverage_pct: r.areas_available ? Math.round((r.areas_covered / r.areas_available) * 100) : null,
+          deficiencies_raised: r.observations,
+          per_inspection: r.inspections ? Number((r.observations / r.inspections).toFixed(1)) : 0,
+          open: r.open, overdue: r.overdue, closed: r.closed,
+          closure_pct: r.observations ? Math.round((r.closed / r.observations) * 100) : null,
+          reports_issued: r.reports_issued, last_inspection: r.last_inspection,
+        }))
+        .sort((a, b) => b.inspections - a.inspections || b.areas_attended_to - a.areas_attended_to),
     };
   }
   if (key === 'repeated-deficiency') {
@@ -2646,7 +3568,7 @@ const RESOURCES: Record<string, { table: string; label: string; columns: string[
   units: { table: 'units', label: 'Unit / Area', columns: ['name', 'applies_to', 'station_id', 'kind', 'sort_order', 'active'], search: ['name'] },
   modules: { table: 'modules', label: 'Module', columns: ['code', 'name', 'tagline', 'description', 'accent', 'sort_order', 'active'] },
   inspection_types: { table: 'inspection_types', label: 'Inspection type', columns: ['name', 'module_id', 'sort_order', 'active'] },
-  item_groups: { table: 'item_groups', label: 'Item group', columns: ['module_id', 'name', 'sort_order', 'active'] },
+  item_groups: { table: 'item_groups', label: 'Item group', columns: ['module_id', 'name', 'applies_to_kinds', 'sort_order', 'active'] },
   inspection_items: { table: 'inspection_items', label: 'Inspection item', columns: ['group_id', 'module_id', 'name', 'applies_to', 'default_department_id', 'default_category_id', 'default_severity_id', 'rule_reference_id', 'sort_order', 'active'], search: ['name'] },
   item_parameters: { table: 'item_parameters', label: 'Checklist parameter', columns: ['name', 'polarity', 'sort_order', 'active'] },
   observation_categories: { table: 'observation_categories', label: 'Observation category', columns: ['name', 'sort_order', 'active'] },
@@ -2655,6 +3577,9 @@ const RESOURCES: Record<string, { table: string; label: string; columns: string[
   supervisor_stations: { table: 'supervisor_stations', label: 'Supervisor - station link', columns: ['supervisor_id', 'station_id', 'is_primary', 'section', 'priority', 'active'] },
   supervisor_departments: { table: 'supervisor_departments', label: 'Supervisor - department link', columns: ['supervisor_id', 'department_id', 'is_primary', 'priority', 'active'] },
   supervisor_coverage: { table: 'supervisor_coverage', label: 'Supervisor coverage', columns: ['supervisor_id', 'station_id', 'unit_id', 'unit_kind', 'item_group_id', 'priority', 'active'] },
+  inspection_areas: { table: 'inspection_areas', label: 'Inspection area (sheet row)', columns: ['inspection_id', 'unit_id', 'unit_name', 'unit_kind', 'coach', 'result', 'remarks', 'sort_order'] },
+  inspection_item_results: { table: 'inspection_item_results', label: 'Inspection item result', columns: ['inspection_id', 'inspection_area_id', 'unit_id', 'item_id', 'item_name', 'group_name', 'result', 'remarks', 'observation_id'] },
+  inspection_previous_reviews: { table: 'inspection_previous_reviews', label: 'Previous-inspection review', columns: ['inspection_id', 'observation_id', 'finding', 'remarks', 'reviewed_by'] },
   item_deficiencies: { table: 'item_deficiencies', label: 'Suggested deficiency', columns: ['item_id', 'group_id', 'module_id', 'text', 'default_department_id', 'default_severity_id', 'default_category_id', 'suggested_tdc_days', 'sort_order', 'active'], search: ['text'] },
   contractors: { table: 'contractors', label: 'Contractor / Licensee', columns: ['name', 'party_type', 'contract_ref', 'scope', 'station_id', 'department_id', 'contact_person', 'mobile', 'email', 'valid_from', 'valid_to', 'security_deposit', 'licence_fee', 'active'], search: ['name', 'contract_ref'] },
   rule_references: { table: 'rule_references', label: 'Rule / instruction', columns: ['code', 'title', 'authority', 'reference_no', 'issued_on', 'url', 'notes', 'active'], search: ['code', 'title'] },

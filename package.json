@@ -22,7 +22,8 @@
     "seed:reset": "npm run seed:reset --workspace server",
     "typecheck": "npm run typecheck --workspace web",
     "smoke": "node scripts/smoke-test.mjs",
-    "build:demo": "npm run seed:reset && node web/scripts/make-demo-data.mjs && npm run build:demo --workspace web && node web/scripts/build-demo.mjs"
+    "build:demo": "npm run seed:reset && node web/scripts/make-demo-data.mjs && npm run build:demo --workspace web && node web/scripts/build-demo.mjs",
+    "check:demo": "node scripts/demo-check.mjs"
   },
   "devDependencies": {
     "concurrently": "^9.1.0"

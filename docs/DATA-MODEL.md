@@ -35,7 +35,7 @@ ISO-8601 UTC strings; plain dates are `YYYY-MM-DD`. Foreign keys are enforced.
 | --- | --- |
 | `modules` | The three inspection streams |
 | `inspection_types` | Passenger Amenities, Commercial, Safe Running, Station, Train, Section, Surprise, Routine, Special, Joint, Follow-up, Compliance, Thematic, Other |
-| `item_groups` | Headings within a module (Water &amp; Sanitation, Ticketing, "A. Passenger Entry/Exit &amp; Boarding", …) |
+| `item_groups` | Headings within a module (Water &amp; Sanitation, Ticketing, "A. Passenger Entry/Exit &amp; Boarding", …). `applies_to_kinds` names the kinds of area the group belongs to, so the inspection sheet offers the ticketing checks in the booking office and not on a platform; empty means it applies everywhere, which is right for the amenity groups |
 | `inspection_items` | The amenity, service or inspection item, with its default department, category, severity and rule reference |
 | `item_parameters` | Available, Functional, Clean, Adequate, Accessible, Properly displayed, Properly maintained, Safe for passenger use, Requires repair, Requires replacement, Not available, Not functional, Not applicable |
 | `item_parameter_map` | Which parameters apply to which item (administrator configurable) |
@@ -57,7 +57,10 @@ ISO-8601 UTC strings; plain dates are `YYYY-MM-DD`. Foreign keys are enforced.
 
 | Table | Purpose |
 | --- | --- |
-| `inspections` | Reference number, module, type, location, inspector, status, summary, QR token, `client_uuid` for offline idempotency |
+| `inspections` | Reference number, office report number, module, type, `scope` (station / train / section), location, inspector, clock times, the predecessor link, status, report status, summary, general remarks, QR token, `client_uuid` for offline idempotency |
+| `inspection_areas` | **The sheet.** One row per area the inspection covers, created when the inspection starts. `result` is `satisfactory`, `deficiencies`, `not_inspected` or `not_available`, so the record can tell an area found in order from one nobody looked at |
+| `inspection_item_results` | What was checked inside an area and how it was found (`ok` / `deficient` / `not_applicable`), with the observation it produced. This is what lets a report print the items found in order rather than only the deficiencies |
+| `inspection_previous_reviews` | The review of what the previous inspection of that place left outstanding, which is how every real inspection opens. The finding is recorded here and mirrored onto the observation's timeline; it never edits the observation |
 | `observations` | The core record. Denormalised `unit_name` and `item_name` snapshots keep history readable after a master is renamed; `deficiency_id` records which suggestion the inspector started from, which is what makes "most reported deficiencies" a count rather than a text match. An inspection carries as many observations as the inspection found |
 | `attachments` | Photographs, video, documents and signatures, tagged by phase (observation, compliance, verification) |
 | `compliances` | One row per compliance round, with its verification outcome, so nothing is overwritten |
@@ -79,6 +82,13 @@ Two views, `v_observations` and `v_inspections`, join the reference data and com
 | `is_open` | Status is not `closed` or `cancelled` |
 | `days_to_tdc` | Signed day count to the TDC; negative when overdue |
 | `attachment_count`, `observation_count`, `open_count`, `closed_count`, `critical_count` | Roll-ups used by lists and dashboards |
+| `areas_on_sheet`, `areas_covered`, `areas_satisfactory`, `areas_with_deficiencies`, `areas_not_inspected`, `areas_not_available` | How much of the place the visit covered, read from `inspection_areas` |
+| `coverage_pct` | Areas attended to as a percentage of the areas that exist there. An area recorded as not available is left out of the denominator rather than counted against the officer |
+| `items_checked`, `items_ok`, `items_deficient` | Roll-ups of `inspection_item_results` |
+| `previous_reviewed`, `previous_complied`, `previous_outstanding`, `previous_ref_no` | The position on what the last inspection of that place left behind |
+
+Coverage lives in the view for the same reason overdue does: every report, dashboard and screen
+then reads the same numbers, and none of them can drift from the sheet.
 
 Overdue is deliberately **not** a stored status. Storing it would mean a scheduled job could leave
 it stale; deriving it means the badge is always right.

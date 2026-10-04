@@ -392,5 +392,178 @@ const { data: itemNorm } = await call('GET', `/masters/stations/${station.id}/no
 check('the norm for one item is served to the inspection screen', itemNorm.data.length > 0,
   itemNorm.data.map((n) => `${n.item_label}: ${n.provided} provided / ${n.required} required ${n.unit}`).join(', '));
 
+heading('16. The inspection as the unit of record');
+
+// One inspector, one visit, as many areas as were attended to. Starting an
+// inspection puts the whole station on its sheet.
+const started = await call('POST', '/inspections', {
+  token: inspector,
+  body: {
+    module_id: masters.modules.find((m) => m.code === 'PA').id,
+    inspection_type_id: masters.inspection_types.find((t) => t.module_code === 'PA' || !t.module_code).id,
+    scope: 'station',
+    station_id: station.id,
+    from_time: '10:15',
+    to_time: '13:40',
+    joint_with: 'Station Manager (smoke test)',
+  },
+});
+check('starting an inspection opens the whole station as its sheet',
+  started.status === 201 && started.data.sheet_opened > 3,
+  `${started.data.ref_no}: ${started.data.sheet_opened} areas`);
+
+const sheetRes = await call('GET', `/inspections/${started.data.id}/sheet`, { token: inspector });
+const sheet = sheetRes.data;
+check('every area starts as not inspected',
+  sheet.areas.length > 0 && sheet.areas.every((a) => a.result === 'not_inspected'),
+  `${sheet.areas.length} areas`);
+check('the catch-all area is kept off the sheet but can still be added',
+  !sheet.areas.some((a) => a.unit_name === 'Other') && sheet.available_areas.some((u) => u.name === 'Other'));
+check('each area carries the item catalogue that belongs to it',
+  sheet.areas[0].catalogue.length > 0,
+  `${sheet.areas[0].unit_name}: ${sheet.areas[0].catalogue.map((g) => g.group_name).join(', ')}`);
+
+// The catalogue is scoped to the kind of area. The amenity checks apply in every
+// area, so the distinction shows in the Commercial module: the booking office is
+// offered the ticketing checks and a platform is not.
+const commercial = await call('POST', '/inspections', {
+  token: inspector,
+  body: {
+    module_id: masters.modules.find((m) => m.code === 'CI').id,
+    inspection_type_id: masters.inspection_types.find((t) => t.name === 'Commercial Inspection').id,
+    scope: 'station',
+    station_id: station.id,
+  },
+});
+const ciSheet = (await call('GET', `/inspections/${commercial.data.id}/sheet`, { token: inspector })).data;
+const ciPlatform = ciSheet.areas.find((a) => a.unit_kind === 'platform');
+const ciOffice = ciSheet.areas.find((a) => a.unit_kind === 'booking office');
+const catalogueNames = (area) => area.catalogue.flatMap((g) => g.items.map((i) => i.name));
+check('the item catalogue is scoped to the kind of area',
+  Boolean(ciPlatform && ciOffice) &&
+    catalogueNames(ciOffice).includes('UTS') &&
+    !catalogueNames(ciPlatform).includes('UTS'),
+  `UTS offered in ${ciOffice?.unit_name}: yes, on ${ciPlatform?.unit_name}: `
+    + `${catalogueNames(ciPlatform ?? { catalogue: [] }).includes('UTS') ? 'yes' : 'no'}`);
+await call('PATCH', `/inspections/${commercial.data.id}`, { token: inspector, body: { status: 'cancelled' } });
+
+// Marking items in order is what gives the report its Part IV.
+const firstArea = sheet.areas[0];
+const firstItems = firstArea.catalogue[0].items.slice(0, 2);
+const recorded = await call('POST', `/inspections/${started.data.id}/areas/${firstArea.id}/items`, {
+  token: inspector,
+  body: { results: firstItems.map((i) => ({ item_id: i.id, result: 'ok' })) },
+});
+check('items checked and found in order are recorded', recorded.status === 201,
+  firstItems.map((i) => i.name).join(', '));
+
+const afterItems = (await call('GET', `/inspections/${started.data.id}/sheet`, { token: inspector })).data;
+check('an area where everything checked was in order becomes satisfactory',
+  afterItems.areas.find((a) => a.id === firstArea.id).result === 'satisfactory');
+check('the coverage follows from the sheet',
+  afterItems.coverage.areas_satisfactory === 1 && afterItems.coverage.items_ok === firstItems.length,
+  `${afterItems.coverage.areas_covered}/${afterItems.coverage.areas_on_sheet} areas, ${afterItems.coverage.items_ok} items in order`);
+
+// A deficiency marks its area without the inspector saying so twice.
+const secondArea = afterItems.areas[1];
+const deficiency = await call('POST', '/observations', {
+  token: inspector,
+  body: {
+    inspection_id: started.data.id,
+    inspection_area_id: secondArea.id,
+    unit_id: secondArea.unit_id,
+    item_id: secondArea.catalogue[0].items[0].id,
+    observation: 'Smoke test: this amenity was found not working during the inspection.',
+    action_by_department_id: electrical.id,
+  },
+});
+const afterDeficiency = (await call('GET', `/inspections/${started.data.id}/sheet`, { token: inspector })).data;
+check('recording a deficiency marks its area on the sheet',
+  deficiency.status === 201 &&
+    afterDeficiency.areas.find((a) => a.id === secondArea.id).result === 'deficiencies',
+  deficiency.data.ref_no);
+
+const refuse = await call('PATCH', `/inspections/${started.data.id}/areas/${secondArea.id}`, {
+  token: inspector, body: { result: 'satisfactory' },
+});
+check('an area carrying a live observation cannot be marked in order', refuse.status === 400,
+  refuse.data?.error?.message ?? '');
+
+// An area that does not exist at this station is recorded as such, and left out
+// of the coverage percentage.
+const absent = afterDeficiency.areas.find((a) => a.result === 'not_inspected');
+await call('PATCH', `/inspections/${started.data.id}/areas/${absent.id}`, {
+  token: inspector, body: { result: 'not_available', remarks: 'Smoke test: not present here' },
+});
+
+// Part I: what the previous inspection of this place left outstanding.
+const previous = await call('GET', `/inspections/${started.data.id}/previous`, { token: inspector });
+check('the previous inspection of this place is found', previous.data.previous !== null,
+  previous.data.previous ? `${previous.data.previous.ref_no}, ${previous.data.items.length} item(s) outstanding` : 'none');
+if (previous.data.items.length > 0) {
+  const target = previous.data.items[0];
+  const review = await call('POST', `/inspections/${started.data.id}/previous/${target.id}`, {
+    token: inspector,
+    body: { finding: 'complied', remarks: 'Smoke test: verified on site.' },
+  });
+  check('a finding of complied verifies the item on site and closes it',
+    review.status === 201 && review.data.moved === 'closed' && review.data.observation.status === 'closed',
+    `${target.ref_no} -> ${review.data.observation?.status}`);
+  check('the review never rewords the observation it is about',
+    review.data.observation.observation === target.observation);
+}
+
+// The report: assembled from the inspection, in its parts.
+const reportRes = await call('GET', `/inspections/${started.data.id}/report`, { token: inspector });
+const report = reportRes.data;
+check('the report carries the areas covered and those not attended to',
+  report.areas_covered.length >= 2 && report.areas_not_covered.length > 0,
+  `${report.areas_covered.length} covered, ${report.areas_not_covered.length} not`);
+check('Part IV carries the items checked and found in order',
+  report.items_in_order.length === firstItems.length);
+check('the narrative leads with the coverage, not the deficiencies',
+  /area\(s\) were attended to/.test(report.narrative) && /item\(s\) were checked/.test(report.narrative));
+
+const issueEarly = await call('POST', `/inspections/${started.data.id}/issue`, { token: inspector, body: {} });
+check('a report cannot be issued before the inspection is completed', issueEarly.status === 400);
+await call('POST', `/inspections/${started.data.id}/complete`, { token: inspector, body: {} });
+const issued = await call('POST', `/inspections/${started.data.id}/issue`, { token: inspector, body: {} });
+check('issuing the report gives it a financial-year office number',
+  issued.status === 200 && /\/\d{4}-\d{2}\/\d{3}$/.test(issued.data.inspection_no ?? ''),
+  issued.data.inspection_no);
+const frozen = await call('PATCH', `/inspections/${started.data.id}/areas/${firstArea.id}`, {
+  token: inspector, body: { remarks: 'after issue' },
+});
+check('an issued report freezes the sheet behind it', frozen.status === 400);
+
+const reportPdf = await fetch(`${BASE}/reports/inspection/${started.data.id}?format=pdf`, {
+  headers: { authorization: `Bearer ${inspector}` },
+});
+const reportPdfHead = Buffer.from(await reportPdf.arrayBuffer()).subarray(0, 4).toString();
+check('the report downloads as a PDF', reportPdf.status === 200 && reportPdfHead === '%PDF');
+
+heading('17. Reports built on the inspection');
+
+const register = await call('GET', '/reports/inspection-register', { token: officer });
+const inspectionCount = (await call('GET', '/inspections', { token: officer, params: { page_size: 1 } })).data.total;
+check('the inspection register has one row per inspection, never one per area',
+  register.data.count === inspectionCount,
+  `${register.data.count} rows for ${inspectionCount} inspections`);
+check('the register carries the coverage of each visit',
+  register.data.data.every((r) => 'areas_covered' in r && 'items_checked' in r),
+  register.data.data[0] ? `${register.data.data[0].place}: ${register.data.data[0].areas_covered}/${register.data.data[0].areas_on_sheet} areas` : '');
+
+const inspectorWise = await call('GET', '/reports/inspector-wise', { token: officer });
+check('inspector-wise sums the visits by the officer who made them',
+  inspectorWise.data.data.length > 0 &&
+    inspectorWise.data.data.reduce((n, r) => n + r.inspections, 0) === inspectionCount,
+  inspectorWise.data.data.map((r) => `${r.inspector_name.split(' ')[0]}:${r.inspections}`).join(' '));
+
+const inspDash = await call('GET', '/dashboard/inspections', { token: officer });
+check('the inspection dashboard counts visits and coverage',
+  inspDash.data.totals.inspections === inspectionCount &&
+    inspDash.data.totals.areas_on_sheet > inspDash.data.totals.areas_covered,
+  `${inspDash.data.totals.inspections} visits, ${inspDash.data.totals.areas_covered}/${inspDash.data.totals.areas_on_sheet} areas, ${inspDash.data.totals.items_checked} items`);
+
 console.log(`\n${failures.length ? `${failures.length} of ${checks} checks FAILED:\n - ${failures.join('\n - ')}` : `All ${checks} checks passed.`}\n`);
 process.exit(failures.length ? 1 : 0);

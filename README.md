@@ -93,44 +93,94 @@ npm run build:demo        # rebuild it from the current seed
 ### Tests
 
 ```bash
-npm test                    # 81 unit and API tests: engines, workflow, RBAC, sync, reports, TDC,
-                            # supervisor links, suggested deficiencies, notes, station import
-npm run smoke               # end-to-end walkthrough against a running server
+npm test                    # 117 unit and API tests: engines, workflow, RBAC, sync, reports, TDC,
+                            # supervisor links, suggested deficiencies, notes, station import,
+                            # the inspection sheet, the report and its issuing
+npm run smoke               # 84-check end-to-end walkthrough against a running server
+npm run check:demo          # drives the offline build in a real browser from file://
 ```
 
 `npm test` runs against throw-away databases and needs nothing else. `npm run smoke` drives the
 reference scenario through a running server (`npm start`) and prints each check as it goes.
 
+`npm run check:demo` exists because the single-file build has its own backend &mdash; the
+in-browser router in `web/src/demo` &mdash; and a route it is missing fails as a toast *inside the
+page*, where neither a type-check nor a unit test can see it. The check walks an inspection through
+to its issued report and fails on any error toast, any page error, or **any network request at
+all**. Playwright is not a dependency of this repository, so the check says how to install it and
+skips rather than failing if it is not there:
+
+```bash
+npm i -D playwright && npx playwright install chromium
+```
+
 ---
 
 ## What the system does
 
-### 1. The 30-second observation
+### 1. The inspection, not the observation
 
-The New Inspection screen follows the workflow exactly, with the observation field as the most
-prominent input:
+One commercial inspector attends to many areas &mdash; often every area &mdash; of a station in a
+single visit. The inspection is therefore the unit of record, and the areas sit inside it:
 
 ```
-Inspection Type -> Station / Train -> Unit / Area -> Amenity, Service or Inspection Item
-   -> Observation -> Action By -> Concerned Supervisor -> TDC (optional) -> SUBMIT
+Start:   Module -> Type -> Station / Train / Section -> time, accompanied by  -> START
+Work:    Part I  review what the last inspection left outstanding
+         Part II every area of the station, each one:  in order | deficiency | N/A
+Finish:  complete -> issue the report  (office number, financial-year series)
 ```
 
-* **Searchable dropdowns everywhere.** Picking a station immediately shows its division, zone,
-  category and type; the Unit list is rebuilt for that station; the item list is filtered to the
-  module and to whether this is a station or a train.
-* **Voice-to-text** for the observation (Web Speech API, hidden where unsupported), **camera
-  capture** and multiple photographs or a short video.
-* **Checklist parameters** per item (Available, Functional, Clean, Adequate, Accessible, &hellip;),
-  configurable per item by the administrator.
+* **Starting an inspection puts the whole station on its sheet**, every area beginning at *not
+  inspected*. That distinction is the point: the record can tell an area found in order from an
+  area nobody looked at, which a list of deficiencies cannot.
+* **One tap per item.** Each area opens to its checklist, grouped and collapsed &mdash; a station
+  carries two hundred inspection items, so only the group being worked through is open. The
+  catalogue is scoped to the kind of area, so the booking office is offered the ticketing checks
+  and a platform is not. "Whole area in order" covers the common case in one tap.
+* **A deficiency opens the observation form** with the area and the item already filled in, and the
+  form closes again once it is recorded. Recording it marks the area and the item automatically, so
+  the inspector never says it twice &mdash; and an area carrying a live observation cannot then be
+  marked in order.
+* **Part I is the continuity.** The previous inspection of that *place* (not of that officer) is
+  found automatically and its outstanding items are listed for review. A finding of *complied* is
+  verification on the ground, so it closes the observation then and there; *not complied* on a
+  submitted compliance reopens it. Neither ever rewords what was submitted.
+* **Searchable dropdowns everywhere**, **voice-to-text** for the observation (Web Speech API,
+  hidden where unsupported), **camera capture**, and **checklist parameters** per item, all
+  configurable by the administrator.
 * **A dropdown of what usually fails.** Picking the item offers the common deficiencies for it, and
   choosing one fills the wording, the department and the TDC in a single tap. See below.
 * **The inspector never types a mobile number.** Station + Unit + Action By resolves the concerned
   supervisor automatically.
 * **TDC stays optional** &mdash; "No TDC" is a first-class choice.
-* **One inspection, many observations.** After each submission the location stays put and only the
-  observation clears, so the next one is a few taps; "Next area / item" clears the unit and the item
-  for a move down the platform, and a running list shows everything recorded so far. The inspection
-  is finished when the officer says so, not when the first observation is submitted.
+* Finishing warns about areas still not attended to rather than silently reporting them as such.
+
+<p align="center">
+  <img src="docs/screenshots/inspection-sheet.png" alt="The inspection sheet: every area of the station, with what was found in each" width="330">
+</p>
+
+### 1a. The inspection report
+
+`/reports/inspection/:id` is the report of the visit, in the parts a commercial inspection report
+has always had:
+
+| Part | What it carries |
+| --- | --- |
+| I | What the previous inspection of this place left outstanding, and its position at this visit |
+| II | Every area on the sheet &mdash; attended to, found in order, not inspected or not available |
+| III | The deficiencies noticed, with responsibility, supervisor and target date |
+| IV | **What was checked and found in order.** The part a list of deficiencies cannot have |
+| V | General remarks |
+
+<p align="center">
+  <img src="docs/screenshots/inspection-report.png" alt="An inspection report: coverage, Part I and Part IV" width="760">
+</p>
+
+PDF, CSV and Excel, with the photographic annexure, the signature block and a QR code that
+verifies without a login. An inspection that found a station in good order produces a report that
+says so, rather than an empty page. Issuing the report gives it a financial-year office number
+(`BSP/COM/SI/2026-27/008`) and freezes the sheet behind it, while the status of every observation
+it cites still reads live.
 
 ### 2. Smart assignment
 
@@ -282,12 +332,27 @@ overwritten.
   <img src="docs/screenshots/dashboard.png" alt="Divisional dashboard" width="760">
 </p>
 
-Overview, module-wise, department-wise, station-wise, severity, 90-day trend, repeated
-deficiencies, **most reported deficiencies** and a supervisor scoreboard, all honouring the same
-filters. Eight report types
-(inspection, compliance, pending, overdue, department-wise, station-wise, repeated deficiency,
-module-wise) export as **PDF, Excel or CSV**. Inspection PDFs carry the observations, photographs,
-signatures and a **QR code** that verifies the report against the live record without a login.
+<p align="center">
+  <img src="docs/screenshots/inspection-dashboard.png" alt="The inspection-wise dashboard: visits, coverage and items checked" width="760">
+</p>
+
+Overview, **inspection-wise**, module-wise, department-wise, station-wise, severity, 90-day trend,
+repeated deficiencies, **most reported deficiencies** and a supervisor scoreboard, all honouring the
+same filters.
+
+The reports come in two kinds, and the page says which is which. Most of them count
+**observations**, which answers what is wrong and who has to fix it. Three count **inspections**,
+which answers the other half &mdash; whether the inspecting is happening and how much of each
+station it reached:
+
+* **Inspection Report** &mdash; one visit in full, in its five parts.
+* **Inspection Register** &mdash; one row per inspection, never one per area: date, location,
+  officer, areas on the sheet, areas attended to, coverage, items checked and deficiencies raised.
+* **Inspector-wise** &mdash; the same visits summed by the officer who made them, with average
+  coverage and closure rate.
+
+All of them export as **PDF, Excel or CSV**, and every PDF carries a **QR code** that verifies the
+report against the live record without a login.
 
 ### 9. Works offline
 
