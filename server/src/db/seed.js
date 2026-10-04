@@ -690,7 +690,8 @@ function seedPeople(ref) {
 /* -------------------------------------------------------------------------- */
 
 /**
- * The reference scenario from the specification: Jabalpur, Platform No. 2,
+ * The reference scenario from the specification, on the division's own data: Bilaspur,
+ * Platform No. 2,
  * Drinking Water, "Water cooler is not functioning", Action By Electrical,
  * supervisor identified automatically, TDC four days out, photograph attached.
  */

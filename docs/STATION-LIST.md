@@ -15,7 +15,7 @@ list**) and have them correct it. Either way the file comes back as CSV.
 | `Station Code` | yes | The station code. This is what identifies a station: a code already in the system is **updated**, a new one is **added** |
 | `Station Name` | yes | |
 | `Division` | recommended | Divisional code (`JBP`, `BPL`, …). Left blank, the default division from Settings is used; a division the system does not know makes the row fail with that reason |
-| `Zone` | no | Zonal code (`WCR`, …). Left blank, it is taken from the division |
+| `Zone` | no | Zonal code (`SECR`, …). Left blank, it is taken from the division |
 | `Category` | no | `NSG-1` &hellip; `NSG-6`, `SG-…`, `HG-…` |
 | `Station Type` | no | Junction, Station, Halt, Terminal, Flag &hellip; |
 | `Section` | no | The section code the station sits on, e.g. `JSG-BSP`. Groups the station list, filters the dashboards, and describes a supervisor's section. The full name of each code is in Admin -> Section |

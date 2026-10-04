@@ -1,4 +1,4 @@
 Station Code,Station Name,Division,Zone,Category,Station Type,Section,No. of Platforms,Latitude,Longitude,Active
-JBP,Jabalpur,JBP,WCR,NSG-2,Junction,Katni - Itarsi,6,23.1685,79.9339,1
-MML,Madan Mahal,JBP,WCR,NSG-5,Station,Katni - Itarsi,3,,,1
-SHR,Sihora Road,JBP,WCR,NSG-6,Station,Katni - Itarsi,2,,,1
+BSP,Bilaspur,BSP,SECR,NSG-2,Junction,JSG-BSP,8,22.0797,82.1409,1
+USL,Uslapur,BSP,SECR,NSG-5,Station,JSG-BSP,3,,,1
+PND,Pendra Road,BSP,SECR,NSG-4,Station,BSP-APR,3,22.7756,81.9256,1

@@ -400,7 +400,7 @@ function StationImport({ onClose, onDone }: { onClose: () => void; onDone: () =>
           }}
           placeholder={
             'Station Code,Station Name,Division,Zone,Category,Station Type,Section,No. of Platforms\n'
-            + 'JBP,Jabalpur,JBP,WCR,NSG-2,Junction,Katni - Itarsi,6'
+            + 'BSP,Bilaspur,BSP,SECR,NSG-2,Junction,JSG-BSP,8'
           }
         />
       </Field>

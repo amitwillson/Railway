@@ -532,9 +532,9 @@ const setting = (key: string, fallback = '') =>
 /** The office block, signature and standing wording, all editable in Admin. */
 export function letterDefaults() {
   return {
-    letterhead: setting('note.letterhead', 'WEST CENTRAL RAILWAY\nJabalpur Division'),
-    office: setting('note.office', 'Sr. Divisional Commercial Manager, Jabalpur'),
-    number_prefix: setting('note.number_prefix', 'JBP/COM/INSP'),
+    letterhead: setting('note.letterhead', 'SOUTH EAST CENTRAL RAILWAY\nBilaspur Division'),
+    office: setting('note.office', 'Sr. Divisional Commercial Manager, Bilaspur'),
+    number_prefix: setting('note.number_prefix', 'BSP/COM/INSP'),
     addressee: setting('note.addressee', 'The Concerned Supervisors / Departmental Officers'),
     salutation: setting('note.salutation', 'Sir / Madam,'),
     preamble: setting('note.preamble', 'The following deficiencies were noticed during the inspection referred to above.'),
@@ -543,7 +543,7 @@ export function letterDefaults() {
   };
 }
 
-/** JBP/COM/INSP/2026-27/014 - a running serial within the financial year. */
+/** BSP/COM/INSP/2026-27/014 - a running serial within the financial year. */
 export function nextNoteNo(prefix = letterDefaults().number_prefix, date = todayIso()): string {
   const [y, m] = date.split('-').map(Number);
   const startYear = m >= 4 ? y : y - 1;

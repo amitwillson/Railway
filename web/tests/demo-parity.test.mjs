@@ -61,6 +61,15 @@ const login = (identifier) =>
   }).token;
 
 before(async () => {
+  // The fixture is generated, not committed. `npm test` runs ensure-demo-data
+  // first; say so plainly if this file is being run on its own without it.
+  const fixture = path.join(ROOT, 'web', 'src', 'demo', 'data.json');
+  if (!fs.existsSync(fixture)) {
+    throw new Error(
+      'web/src/demo/data.json is missing, so the offline backend cannot be bundled.\n'
+        + 'Run "npm run ensure:data --workspace web" (or just "npm test") first.'
+    );
+  }
   const esbuild = await import('esbuild');
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'demo-parity-'));
   const outfile = path.join(tmpDir, 'router.mjs');

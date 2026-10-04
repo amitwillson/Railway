@@ -5,13 +5,14 @@
   "type": "module",
   "description": "Mobile-first PWA front end for the Railway Inspection & Compliance Management System",
   "scripts": {
-    "dev": "vite",
-    "build": "tsc --noEmit && vite build",
+    "dev": "npm run ensure:data && vite",
+    "build": "npm run ensure:data && tsc --noEmit && vite build",
     "preview": "vite preview",
-    "typecheck": "tsc --noEmit",
-    "build:demo": "DEMO=1 vite build",
+    "typecheck": "npm run ensure:data && tsc --noEmit",
+    "build:demo": "npm run ensure:data && DEMO=1 vite build",
     "demo:data": "node scripts/make-demo-data.mjs",
-    "test": "node --test tests/*.test.mjs"
+    "test": "npm run ensure:data && node --test tests/*.test.mjs",
+    "ensure:data": "node scripts/ensure-demo-data.mjs"
   },
   "dependencies": {
     "react": "^18.3.1",

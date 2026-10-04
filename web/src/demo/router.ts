@@ -3019,7 +3019,7 @@ const noteView = (id: number | string) => {
   return { ...note, by_department: byDepartment(note.observations) };
 };
 
-/** "at Jabalpur" for a station, "on Train 12189" for a train. */
+/** "at Bilaspur" for a station, "on Train 18237" for a train. */
 const placeOf = (inspection: Row | undefined, rows: Row[]) => {
   const station = inspection ? byId('stations', inspection.station_id) : undefined;
   if (station) return { preposition: 'at', name: station.name as string };

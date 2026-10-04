@@ -59,15 +59,22 @@ npm run seed:reset          # master data + a demonstration dataset
 npm run dev                 # API on :4000, web client on :5173
 ```
 
+The web client embeds a fixture exported from the seeded database, so that the offline build can run
+with no server. It is generated rather than committed &mdash; a second copy of the seed would only go
+stale &mdash; so `dev`, `build`, `typecheck` and the tests create it on first use, seeding the
+database first if that is missing too. Nothing has to be run in a particular order.
+
 Open <http://localhost:5173> and sign in with any seeded account &mdash; password `Railway@2026`:
 
 | Employee ID | Role | Who they are |
 | --- | --- | --- |
-| `CMI01` | Inspecting officer | Chief Commercial Inspector, Jabalpur |
-| `SSEEL01` | Supervisor | SSE/Electrical &mdash; receives the assigned observations |
-| `SRDCM01` | Divisional officer | Sr. DCM &mdash; dashboards, monitoring, verification |
+| `CMI01` | Inspecting officer | Chief Commercial Inspector / Bilaspur |
+| `SSEEL01` | Supervisor | SSE/Electrical, Jharsuguda&ndash;Bilaspur &mdash; receives the assigned observations |
+| `SRDCM01` | Divisional officer | Sr. Divisional Commercial Manager &mdash; dashboards, monitoring, verification |
 | `ADMIN01` | Administrator | Full system control, master data, audit trail |
-| `VIEW01` | Viewer | Read-only |
+| `VIEW01` | Viewer | Divisional office, read-only |
+
+Every account is a **post**, not a person: the division's nomination is not this system's to invent.
 
 The sign-in screen lists every demonstration account (outside production) so nothing has to be
 looked up.
@@ -282,16 +289,16 @@ An inspection produces a list of observations, each already assigned with its ow
 goes out of the office, though, is a letter. **Inspection Note** compiles them into one:
 
 ```
-WEST CENTRAL RAILWAY
-Office of the Divisional Railway Manager (Commercial), Jabalpur Division
+SOUTH EAST CENTRAL RAILWAY
+Office of the Divisional Railway Manager (Commercial), Bilaspur Division
 -----------------------------------------------------------------------
-No. JBP/COM/INSP/2026-27/014                        Date: 30 September 2026
+No. BSP/COM/INSP/2026-27/001                        Date: 30 September 2026
 
 To,   The Concerned Supervisors / Departmental Officers
-Sub:  Deficiencies noticed during passenger amenities inspection at Jabalpur
+Sub:  Deficiencies noticed during passenger amenities inspection at Bilaspur
 
 Sl.  Location / Unit   Item            Deficiency noticed     Action by   TDC
- 1   Platform No. 2    Water Cooler    Water cooler is not    Electrical  02.10.2026
+ 1   Platform No. 2    Water Cooler    Water cooler is not    Electrical  08.10.2026
                                        functioning.
 ```
 

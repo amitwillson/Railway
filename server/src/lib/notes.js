@@ -26,9 +26,9 @@ const setting = (key, fallback = null) => get('SELECT value FROM settings WHERE 
 /** The office block, signature and standing wording, all editable in Admin. */
 export function letterDefaults() {
   return {
-    letterhead: setting('note.letterhead', 'WEST CENTRAL RAILWAY\nOffice of the Divisional Railway Manager (Commercial)\nJabalpur Division'),
-    office: setting('note.office', 'Sr. Divisional Commercial Manager, Jabalpur'),
-    number_prefix: setting('note.number_prefix', 'JBP/COM/INSP'),
+    letterhead: setting('note.letterhead', 'SOUTH EAST CENTRAL RAILWAY\nOffice of the Divisional Railway Manager (Commercial)\nBilaspur Division'),
+    office: setting('note.office', 'Sr. Divisional Commercial Manager, Bilaspur'),
+    number_prefix: setting('note.number_prefix', 'BSP/COM/INSP'),
     addressee: setting('note.addressee', 'The Concerned Supervisors / Departmental Officers'),
     salutation: setting('note.salutation', 'Sir / Madam,'),
     preamble: setting(
@@ -47,7 +47,7 @@ export function letterDefaults() {
 }
 
 /**
- * Financial-year serial: JBP/COM/INSP/2026-27/014. Counted per prefix and year so
+ * Financial-year serial: BSP/COM/INSP/2026-27/014. Counted per prefix and year so
  * the series restarts each April, the way the office series does.
  */
 export function nextNoteNo(prefix = letterDefaults().number_prefix, date = today()) {
@@ -126,7 +126,7 @@ export function draftFor({ inspectionId = null, observationIds = null } = {}) {
   };
 }
 
-/** "at Jabalpur" for a station, "on Train 12189" for a train. */
+/** "at Bilaspur" for a station, "on Train 18237" for a train. */
 function placeOf(inspection, observations = []) {
   if (inspection?.station_name) return { preposition: 'at', name: inspection.station_name };
   if (inspection?.train_number) return { preposition: 'on', name: `Train ${inspection.train_number}` };
