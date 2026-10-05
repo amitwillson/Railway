@@ -703,6 +703,264 @@ on('GET', '/masters/contractors', ({ q }) => {
 });
 
 
+/* ----------------- jurisdiction and feedback, as the server does ----------- */
+
+/**
+ * What an officer covers, and what they think of the application. Both mirror
+ * server/src/lib/jurisdiction.js and server/src/lib/feedback.js: a self-declared
+ * jurisdiction ranks below the division's own record, and a suggestion is never
+ * rewritten by the office.
+ */
+
+const FEEDBACK_KINDS = ['suggestion', 'problem', 'praise'];
+const FEEDBACK_STATUSES = ['new', 'noted', 'planned', 'done', 'declined'];
+
+const jurisdictionOf = (userId: number, activeOnly = true): Row[] =>
+  where('user_jurisdictions', (j) => j.user_id === userId && (!activeOnly || j.active))
+    .map((j): Row => {
+      const station = byId('stations', j.station_id);
+      const section = table('sections').find((x) => x.code === j.section);
+      const division = byId('divisions', j.division_id);
+      return {
+        ...j,
+        is_primary: Boolean(j.is_primary),
+        active: Boolean(j.active),
+        station_name: station?.name ?? null,
+        station_code: station?.code ?? null,
+        station_section: station?.section ?? null,
+        section_name: section?.name ?? null,
+        division_name: division?.name ?? null,
+        division_code: division?.code ?? null,
+        set_by_name: byId('users', j.set_by)?.name ?? null,
+      };
+    })
+    .sort((a, b) => Number(b.is_primary) - Number(a.is_primary) || String(a.kind).localeCompare(String(b.kind)));
+
+/** The station ids an officer covers, a section expanding to its stations. */
+function stationsCovered(userId: number): number[] {
+  const rows = jurisdictionOf(userId);
+  const ids = new Set<number>(rows.filter((r) => r.station_id).map((r) => r.station_id));
+  const sections = rows.filter((r) => r.section).map((r) => r.section);
+  const divisions = rows.filter((r) => r.kind === 'division' && r.division_id).map((r) => r.division_id);
+  for (const station of table('stations')) {
+    if (!station.active) continue;
+    if (sections.includes(station.section)) ids.add(station.id);
+    if (divisions.includes(station.division_id)) ids.add(station.id);
+  }
+  return [...ids];
+}
+
+const jurisdictionChoices = (user: Row) => {
+  const divisionId = user.division_id ?? null;
+  return {
+    sections: where('sections', (sec) => sec.active && (!divisionId || sec.division_id == null || sec.division_id === divisionId))
+      .sort((a, b) => (a.sort_order ?? 100) - (b.sort_order ?? 100))
+      .map((sec) => ({
+        code: sec.code,
+        name: sec.name,
+        division_id: sec.division_id ?? null,
+        station_count: where('stations', (st) => st.active && st.section === sec.code).length,
+      })),
+    stations: where('stations', (st) => st.active && (!divisionId || st.division_id === divisionId))
+      .sort((a, b) => String(a.section).localeCompare(String(b.section)) || (a.km ?? 0) - (b.km ?? 0))
+      .map((st) => ({
+        id: st.id, code: st.code, name: st.name, section: st.section,
+        category: st.category, station_type: st.station_type, km: st.km,
+      })),
+    divisions: where('divisions', (d) => d.active && (!divisionId || d.id === divisionId))
+      .map((d) => ({ id: d.id, code: d.code, name: d.name })),
+  };
+};
+
+/** Replaces an officer's jurisdiction, standing down what they dropped. */
+function setJurisdiction(userId: number, body: Row, actor: Row) {
+  const user = byId('users', userId);
+  if (!user) throw notFound('User');
+  const sections = [...new Set(((body?.sections ?? []) as unknown[]).filter(Boolean).map(String))];
+  const stations = [...new Set(((body?.stations ?? []) as unknown[]).filter(Boolean).map(Number))];
+  const divisions = [...new Set(((body?.divisions ?? []) as unknown[]).filter(Boolean).map(Number))];
+  const primary = body?.primary ?? null;
+
+  for (const code of sections) {
+    if (!table('sections').some((x) => x.active && x.code === code)) throw bad(`Unknown section: ${code}`);
+  }
+  for (const id of stations) {
+    if (!where('stations', (x) => x.active && x.id === id).length) throw bad(`Unknown station: ${id}`);
+  }
+
+  const source = actor && actor.id !== userId ? 'admin' : 'self';
+  const now = nowIso();
+  for (const row of where('user_jurisdictions', (j) => j.user_id === userId && j.active)) {
+    update('user_jurisdictions', row.id, { active: 0, updated_at: now });
+  }
+  const upsert = (values: Row) => {
+    const existing = where(
+      'user_jurisdictions',
+      (j) =>
+        j.user_id === userId && j.kind === values.kind &&
+        (j.section ?? null) === (values.section ?? null) &&
+        (j.station_id ?? null) === (values.station_id ?? null) &&
+        (j.division_id ?? null) === (values.division_id ?? null)
+    )[0];
+    const row = { ...values, user_id: userId, source, set_by: actor?.id ?? null, active: 1, updated_at: now };
+    if (existing) update('user_jurisdictions', existing.id, row);
+    else insert('user_jurisdictions', { ...row, created_at: now });
+  };
+  for (const section of sections) {
+    upsert({
+      kind: 'section', section, station_id: null, division_id: user.division_id ?? null,
+      is_primary: primary?.kind === 'section' && primary.value === section ? 1 : 0,
+    });
+  }
+  for (const id of stations) {
+    upsert({
+      kind: 'station', section: null, station_id: id, division_id: null,
+      is_primary: primary?.kind === 'station' && Number(primary.value) === id ? 1 : 0,
+    });
+  }
+  for (const id of divisions) {
+    upsert({
+      kind: 'division', section: null, station_id: null, division_id: id,
+      is_primary: primary?.kind === 'division' && Number(primary.value) === id ? 1 : 0,
+    });
+  }
+  return jurisdictionOf(userId);
+}
+
+on('GET', '/profile/jurisdiction', ({ user }) => ({
+  user: { id: user.id, name: user.name, role: user.role, designation: user.designation },
+  data: jurisdictionOf(user.id),
+  stations_covered: stationsCovered(user.id).length,
+  choices: jurisdictionChoices(user),
+}));
+
+on('PUT', '/profile/jurisdiction', ({ body, user }) => {
+  const data = setJurisdiction(user.id, body ?? {}, user);
+  audit({ action: 'JURISDICTION_SET', entityType: 'user', entityId: user.id, user, next: { covers: data.length } });
+  return { data, stations_covered: stationsCovered(user.id).length };
+});
+
+on('GET', '/profile/jurisdiction/:userId', ({ params, user }) => {
+  const target = byId('users', params[0]);
+  if (!target) throw notFound('User');
+  if (target.id !== user.id && !isOfficer(user)) {
+    throw forbidden("Only a divisional officer or an administrator can see another officer's jurisdiction");
+  }
+  return {
+    user: { id: target.id, name: target.name, role: target.role, designation: target.designation },
+    data: jurisdictionOf(target.id),
+    stations_covered: stationsCovered(target.id).length,
+    choices: target.id === user.id ? jurisdictionChoices(user) : undefined,
+  };
+});
+
+on('PUT', '/profile/jurisdiction/:userId', ({ params, body, user }) => {
+  const userId = Number(params[0]);
+  if (userId !== user.id && !isAdmin(user)) {
+    throw forbidden("Only an administrator can set another officer's jurisdiction");
+  }
+  const data = setJurisdiction(userId, body ?? {}, user);
+  audit({ action: 'JURISDICTION_SET', entityType: 'user', entityId: userId, user, next: { covers: data.length } });
+  return { data, stations_covered: stationsCovered(userId).length };
+});
+
+/* -------------------------------- feedback -------------------------------- */
+
+const feedbackView = (f: Row): Row => ({
+  ...f,
+  user_name: byId('users', f.user_id)?.name ?? null,
+  user_designation: byId('users', f.user_id)?.designation ?? null,
+  user_role: byId('users', f.user_id)?.role ?? null,
+  inspection_ref: byId('inspections', f.inspection_id)?.ref_no ?? null,
+  inspection_title: byId('inspections', f.inspection_id)?.title ?? null,
+  responded_by_name: byId('users', f.responded_by)?.name ?? null,
+});
+
+const feedbackSummary = () => {
+  const rows = table('app_feedback');
+  const byStatus = Object.fromEntries(FEEDBACK_STATUSES.map((s) => [s, rows.filter((f) => f.status === s).length]));
+  const byKind = Object.fromEntries(FEEDBACK_KINDS.map((k) => [k, rows.filter((f) => f.kind === k).length]));
+  return {
+    total: rows.length,
+    by_status: byStatus,
+    by_kind: byKind,
+    open: byStatus.new + byStatus.noted + byStatus.planned,
+  };
+};
+
+on('GET', '/profile/feedback', ({ q, user }) => {
+  const mine = bool(q.get('mine')) === true || !isOfficer(user);
+  const statuses = q.get('status')?.split(',').map((x) => x.trim()).filter(Boolean) ?? [];
+  const kind = q.get('kind');
+  const limit = num(q.get('limit')) ?? 100;
+  const data = table('app_feedback')
+    .filter((f) => {
+      if (mine && f.user_id !== user.id) return false;
+      if (statuses.length && !statuses.includes(f.status)) return false;
+      if (kind && f.kind !== kind) return false;
+      return true;
+    })
+    .sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)) || b.id - a.id)
+    .slice(0, limit)
+    .map(feedbackView);
+  return {
+    data,
+    summary: isOfficer(user) ? feedbackSummary() : undefined,
+    statuses: FEEDBACK_STATUSES,
+    kinds: FEEDBACK_KINDS,
+  };
+});
+
+on('POST', '/profile/feedback', ({ body, user }) => {
+  const suggestion = String(body?.suggestion ?? '').trim();
+  if (suggestion.length < 5) throw bad('Say a little more about what would help');
+  const kind = body?.kind ?? 'suggestion';
+  if (!FEEDBACK_KINDS.includes(kind)) throw bad('Unknown kind of feedback');
+  if (body?.inspection_id && !byId('inspections', body.inspection_id)) throw bad('Unknown inspection');
+  const created = insert('app_feedback', {
+    user_id: user.id,
+    inspection_id: body?.inspection_id ?? null,
+    kind,
+    area: body?.area ?? null,
+    suggestion,
+    status: 'new',
+    response: null,
+    responded_by: null,
+    responded_at: null,
+    created_at: nowIso(),
+    updated_at: null,
+  });
+  audit({ action: 'FEEDBACK_SUBMIT', entityType: 'feedback', entityId: created.id, user, next: { kind, area: created.area } });
+  return feedbackView(created);
+});
+
+on('PATCH', '/profile/feedback/:id', ({ params, body, user }) => {
+  if (!isOfficer(user)) throw forbidden('Only a divisional officer or an administrator can answer feedback');
+  const row = byId('app_feedback', params[0]);
+  if (!row) throw notFound('Feedback');
+  if (body?.status && !FEEDBACK_STATUSES.includes(body.status)) throw bad('Unknown status');
+  if (!body?.status && body?.response === undefined) throw bad('Give a status or a response');
+  update('app_feedback', row.id, {
+    status: body?.status ?? row.status,
+    response: body?.response === undefined ? row.response : body.response,
+    responded_by: user.id,
+    responded_at: nowIso(),
+    updated_at: nowIso(),
+  });
+  audit({ action: 'FEEDBACK_RESPOND', entityType: 'feedback', entityId: row.id, user, next: { status: row.status } });
+  return feedbackView(byId('app_feedback', row.id)!);
+});
+
+on('DELETE', '/profile/feedback/:id', ({ params, user }) => {
+  const row = byId('app_feedback', params[0]);
+  if (!row) throw notFound('Feedback');
+  if (row.user_id !== user.id) throw forbidden('Only the person who wrote it can withdraw it');
+  if (row.response) throw bad('This has already been answered and stays on the record');
+  update('app_feedback', row.id, { status: 'declined', updated_at: nowIso() });
+  audit({ action: 'FEEDBACK_WITHDRAW', entityType: 'feedback', entityId: row.id, user });
+  return feedbackView(byId('app_feedback', row.id)!);
+});
+
 /* --------------------------- the inspection sheet -------------------------- */
 
 /**
@@ -3603,6 +3861,8 @@ const RESOURCES: Record<string, { table: string; label: string; columns: string[
   supervisor_stations: { table: 'supervisor_stations', label: 'Supervisor - station link', columns: ['supervisor_id', 'station_id', 'is_primary', 'section', 'priority', 'active'] },
   supervisor_departments: { table: 'supervisor_departments', label: 'Supervisor - department link', columns: ['supervisor_id', 'department_id', 'is_primary', 'priority', 'active'] },
   supervisor_coverage: { table: 'supervisor_coverage', label: 'Supervisor coverage', columns: ['supervisor_id', 'station_id', 'unit_id', 'unit_kind', 'item_group_id', 'priority', 'active'] },
+  user_jurisdictions: { table: 'user_jurisdictions', label: 'Officer jurisdiction', columns: ['user_id', 'kind', 'division_id', 'section', 'station_id', 'is_primary', 'source', 'set_by', 'active'] },
+  app_feedback: { table: 'app_feedback', label: 'Application feedback', columns: ['user_id', 'inspection_id', 'kind', 'area', 'suggestion', 'status', 'response', 'responded_by'], search: ['suggestion', 'response'] },
   inspection_areas: { table: 'inspection_areas', label: 'Inspection area (sheet row)', columns: ['inspection_id', 'unit_id', 'unit_name', 'unit_kind', 'coach', 'result', 'remarks', 'sort_order'] },
   inspection_item_results: { table: 'inspection_item_results', label: 'Inspection item result', columns: ['inspection_id', 'inspection_area_id', 'unit_id', 'item_id', 'item_name', 'group_name', 'result', 'remarks', 'observation_id'] },
   inspection_previous_reviews: { table: 'inspection_previous_reviews', label: 'Previous-inspection review', columns: ['inspection_id', 'observation_id', 'finding', 'remarks', 'reviewed_by'] },

@@ -10,9 +10,11 @@ import {
 } from '../components/ui';
 import { formatDateTime, titleCase } from '../lib/format';
 import { SearchSelect } from '../components/ui';
-import type { Department, Station, Supervisor } from '../api/types';
+import type {
+  Department, Feedback, FeedbackPayload, FeedbackStatus, Station, Supervisor,
+} from '../api/types';
 
-type Tab = 'masters' | 'supervisors' | 'users' | 'settings' | 'audit' | 'system';
+type Tab = 'masters' | 'supervisors' | 'users' | 'feedback' | 'settings' | 'audit' | 'system';
 
 interface ResourceMeta { key: string; label: string; columns: string[]; count: number; searchable: boolean }
 type Row = Record<string, string | number | null>;
@@ -47,6 +49,7 @@ export default function Admin() {
           { key: 'masters', label: 'Master data' },
           { key: 'supervisors', label: 'Supervisors' },
           { key: 'users', label: 'Users' },
+          { key: 'feedback', label: 'Feedback' },
           { key: 'settings', label: 'Settings & rules' },
           { key: 'audit', label: 'Audit trail' },
           { key: 'system', label: 'System' },
@@ -61,6 +64,7 @@ export default function Admin() {
       {tab === 'masters' && <Masters />}
       {tab === 'supervisors' && <SupervisorLinks />}
       {tab === 'users' && <Users />}
+      {tab === 'feedback' && <FeedbackInbox />}
       {tab === 'settings' && <Settings />}
       {tab === 'audit' && <Audit />}
       {tab === 'system' && <System />}
@@ -1203,6 +1207,182 @@ function System() {
           </Card>
         )}
       </div>
+    </div>
+  );
+}
+
+
+/* -------------------------------------------------------------------------- */
+/* What the people using this application have said about it                  */
+/* -------------------------------------------------------------------------- */
+
+const FEEDBACK_TONE: Record<FeedbackStatus, string> = {
+  new: 'warning', noted: 'accent', planned: 'accent', done: 'good', declined: 'neutral',
+};
+const FEEDBACK_LABEL: Record<FeedbackStatus, string> = {
+  new: 'New', noted: 'Read', planned: 'Planned', done: 'Done', declined: 'Not taken up',
+};
+
+/**
+ * The suggestions the inspectors and supervisors have sent in, mostly from the
+ * end of an inspection. The office answers on the record; it never edits what
+ * was said, so an officer can see their own words and the reply beside them.
+ */
+function FeedbackInbox() {
+  const toast = useToast();
+  const [payload, setPayload] = useState<FeedbackPayload | null>(null);
+  const [status, setStatus] = useState<string>('');
+  const [loading, setLoading] = useState(true);
+  const [answering, setAnswering] = useState<Feedback | null>(null);
+  const [response, setResponse] = useState('');
+  const [nextStatus, setNextStatus] = useState<FeedbackStatus>('noted');
+  const [busy, setBusy] = useState(false);
+
+  const load = useCallback(() => {
+    setLoading(true);
+    api.get<FeedbackPayload>('/profile/feedback', { status: status || undefined, limit: 200 })
+      .then(setPayload)
+      .catch(() => setPayload(null))
+      .finally(() => setLoading(false));
+  }, [status]);
+
+  useEffect(load, [load]);
+
+  const answer = async () => {
+    if (!answering) return;
+    setBusy(true);
+    try {
+      await api.patch(`/profile/feedback/${answering.id}`, {
+        status: nextStatus,
+        response: response.trim() || undefined,
+      });
+      toast.success(`${answering.user_name ?? 'The officer'} will see your reply`);
+      setAnswering(null);
+      setResponse('');
+      load();
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : 'Could not save the reply');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (loading && !payload) return <Loading label="Loading feedback" />;
+  const summary = payload?.summary;
+
+  return (
+    <div className="stack" style={{ '--gap': '12px' } as React.CSSProperties}>
+      {summary && (
+        <div className="grid grid--tiles">
+          <Card pad><div className="small muted">Received</div><div style={{ fontSize: '1.5rem', fontWeight: 700 }}>{summary.total}</div></Card>
+          <Card pad><div className="small muted">Still open</div><div style={{ fontSize: '1.5rem', fontWeight: 700 }}>{summary.open}</div></Card>
+          <Card pad><div className="small muted">Suggestions</div><div style={{ fontSize: '1.5rem', fontWeight: 700 }}>{summary.by_kind.suggestion}</div></Card>
+          <Card pad><div className="small muted">Problems</div><div style={{ fontSize: '1.5rem', fontWeight: 700 }}>{summary.by_kind.problem}</div></Card>
+        </div>
+      )}
+
+      <div className="chips">
+        <button className={`chip${!status ? ' chip--on' : ''}`} onClick={() => setStatus('')}>All</button>
+        {(payload?.statuses ?? []).map((s) => (
+          <button key={s} className={`chip${status === s ? ' chip--on' : ''}`} onClick={() => setStatus(s)}>
+            {FEEDBACK_LABEL[s]}
+            {summary && <span className="muted mono-num"> ({summary.by_status[s]})</span>}
+          </button>
+        ))}
+      </div>
+
+      <Card
+        title="From the people using it"
+        subtitle="Asked at the end of an inspection, and from the profile screen"
+        icon="edit"
+        pad={false}
+      >
+        {(payload?.data.length ?? 0) === 0 ? (
+          <div style={{ padding: 14 }}>
+            <EmptyState icon="check" title="Nothing here" text="No suggestions match this filter." />
+          </div>
+        ) : (
+          <div>
+            {payload!.data.map((f) => (
+              <div className="sheet-row" key={f.id}>
+                <div className="row row--wrap" style={{ gap: 6 }}>
+                  <Badge tone={FEEDBACK_TONE[f.status]}>{FEEDBACK_LABEL[f.status]}</Badge>
+                  <Badge tone="outline">{titleCase(f.kind)}</Badge>
+                  {f.area && <Badge tone="outline">{f.area}</Badge>}
+                  <span className="spacer" />
+                  <span className="xsmall muted">{formatDateTime(f.created_at)}</span>
+                </div>
+                <div className="small" style={{ marginTop: 5 }}>{f.suggestion}</div>
+                <div className="xsmall muted" style={{ marginTop: 4 }}>
+                  <Icon name="user" size={11} /> {f.user_name ?? 'Unknown'}
+                  {f.user_designation ? `, ${f.user_designation}` : ''}
+                  {f.inspection_ref ? ` · during ${f.inspection_ref}` : ''}
+                </div>
+                {f.response && (
+                  <div className="xsmall" style={{ marginTop: 6, paddingLeft: 10, borderLeft: '2px solid var(--accent)' }}>
+                    <strong>{f.responded_by_name ?? 'The office'}:</strong> {f.response}
+                  </div>
+                )}
+                <Button
+                  size="sm"
+                  variant="quiet"
+                  icon="send"
+                  style={{ marginTop: 8 }}
+                  onClick={() => {
+                    setAnswering(f);
+                    setResponse(f.response ?? '');
+                    setNextStatus(f.status === 'new' ? 'noted' : f.status);
+                  }}
+                >
+                  {f.response ? 'Change the reply' : 'Reply'}
+                </Button>
+              </div>
+            ))}
+          </div>
+        )}
+      </Card>
+
+      {answering && (
+        <Sheet
+          title="Reply"
+          subtitle={`${answering.user_name ?? 'An officer'} · ${answering.area ?? titleCase(answering.kind)}`}
+          onClose={() => setAnswering(null)}
+          footer={
+            <>
+              <Button variant="quiet" onClick={() => setAnswering(null)}>Cancel</Button>
+              <Button loading={busy} onClick={answer}>Save the reply</Button>
+            </>
+          }
+        >
+          <Banner tone="info">
+            What the officer wrote stays as it is. Your reply and the status are added beside it, and they see
+            both on their profile screen.
+          </Banner>
+          <p className="small" style={{ margin: '12px 0' }}>{answering.suggestion}</p>
+          <Field label="Where it stands">
+            <div className="chips">
+              {(payload?.statuses ?? []).map((s) => (
+                <button
+                  key={s}
+                  type="button"
+                  className={`chip${nextStatus === s ? ' chip--on' : ''}`}
+                  onClick={() => setNextStatus(s)}
+                >
+                  {FEEDBACK_LABEL[s]}
+                </button>
+              ))}
+            </div>
+          </Field>
+          <Field label="Reply" hint="Optional - but an officer who hears nothing stops suggesting things">
+            <textarea
+              className="textarea"
+              style={{ minHeight: 90 }}
+              value={response}
+              onChange={(e) => setResponse(e.target.value)}
+            />
+          </Field>
+        </Sheet>
+      )}
     </div>
   );
 }

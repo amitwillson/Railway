@@ -565,5 +565,102 @@ check('the inspection dashboard counts visits and coverage',
     inspDash.data.totals.areas_on_sheet > inspDash.data.totals.areas_covered,
   `${inspDash.data.totals.inspections} visits, ${inspDash.data.totals.areas_covered}/${inspDash.data.totals.areas_on_sheet} areas, ${inspDash.data.totals.items_checked} items`);
 
+heading('18. An officer says where they work');
+
+const juris = await call('GET', '/profile/jurisdiction', { token: inspector });
+check('the picker offers the division\'s own sections and stations',
+  juris.data.choices.sections.length > 0 && juris.data.choices.stations.length > 0,
+  `${juris.data.choices.sections.length} sections, ${juris.data.choices.stations.length} stations`);
+check('every section says how many stations it carries',
+  juris.data.choices.sections.every((sec) => typeof sec.station_count === 'number'),
+  juris.data.choices.sections.map((sec) => `${sec.code}:${sec.station_count}`).join(' '));
+
+const firstSection = juris.data.choices.sections[0];
+const offSection = juris.data.choices.stations.find((st) => st.section && st.section !== firstSection.code);
+const chosen = await call('PUT', '/profile/jurisdiction', {
+  token: inspector,
+  body: {
+    sections: [firstSection.code],
+    stations: [offSection.id],
+    primary: { kind: 'section', value: firstSection.code },
+  },
+});
+check('an inspector chooses a section and a station off it',
+  chosen.status === 200 && chosen.data.stations_covered === firstSection.station_count + 1,
+  `${chosen.data.stations_covered} stations covered`);
+check('what they chose is recorded as their own, not the office\'s',
+  chosen.data.data.every((r) => r.source === 'self'));
+check('the section they named is the one the screens default to',
+  chosen.data.data.find((r) => r.is_primary)?.section === firstSection.code);
+
+const narrowed = await call('PUT', '/profile/jurisdiction', {
+  token: inspector, body: { sections: [firstSection.code] },
+});
+check('dropping the station stands it down rather than deleting it',
+  narrowed.status === 200 && narrowed.data.data.length === 1 &&
+    narrowed.data.stations_covered === firstSection.station_count,
+  `${narrowed.data.stations_covered} stations covered`);
+
+const nonsense = await call('PUT', '/profile/jurisdiction', {
+  token: inspector, body: { sections: ['NOT-A-SECTION'] },
+});
+check('a section that does not exist is refused', nonsense.status === 400, nonsense.data.error?.message);
+
+const theirs = await call('PUT', `/profile/jurisdiction/1`, { token: inspector, body: { sections: [] } });
+check('one officer cannot set another officer\'s jurisdiction', theirs.status === 403);
+
+const supJuris = await call('PUT', '/profile/jurisdiction', {
+  token: supervisor, body: { sections: [firstSection.code] },
+});
+check('a supervisor chooses their own too',
+  supJuris.status === 200 && supJuris.data.stations_covered > 0,
+  `${supJuris.data.stations_covered} stations covered`);
+
+heading('19. What the people using it think of it');
+
+const said = await call('POST', '/profile/feedback', {
+  token: inspector,
+  body: {
+    suggestion: 'The area sheet collapses every time I record a deficiency, and I lose my place.',
+    kind: 'suggestion',
+    area: 'Inspection sheet',
+    inspection_id: inspection.id,
+  },
+});
+check('an inspector says what slowed them down, against the inspection it came out of',
+  said.status === 201 && said.data.inspection_id === inspection.id,
+  `${said.data.inspection_ref} - ${said.data.status}`);
+
+const tooShort = await call('POST', '/profile/feedback', { token: inspector, body: { suggestion: 'ok' } });
+check('a one-word answer is refused', tooShort.status === 400);
+
+const mine = await call('GET', '/profile/feedback', { token: inspector });
+check('an officer sees their own and nobody else\'s',
+  mine.data.data.length > 0 && new Set(mine.data.data.map((f) => f.user_id)).size === 1);
+check('and does not get the office\'s counters', mine.data.summary === undefined);
+
+const feedbackInbox = await call('GET', '/profile/feedback', { token: officer });
+check('the office sees everybody\'s, with a count of where they stand',
+  feedbackInbox.data.summary?.total >= 1 && new Set(feedbackInbox.data.data.map((f) => f.user_id)).size >= 1,
+  `${feedbackInbox.data.summary?.total} in all, ${feedbackInbox.data.summary?.open} still open`);
+
+const answered = await call('PATCH', `/profile/feedback/${said.data.id}`, {
+  token: officer,
+  body: { status: 'planned', response: 'Agreed. The sheet will keep the area open after a deficiency is recorded.' },
+});
+check('the office replies, and never rewrites what was said',
+  answered.status === 200 && answered.data.status === 'planned' &&
+    answered.data.suggestion === said.data.suggestion,
+  answered.data.responded_by_name);
+
+const cannotAnswer = await call('PATCH', `/profile/feedback/${said.data.id}`, {
+  token: inspector, body: { status: 'done' },
+});
+check('an inspector cannot answer their own', cannotAnswer.status === 403);
+
+const cannotWithdraw = await call('DELETE', `/profile/feedback/${said.data.id}`, { token: inspector });
+check('and cannot withdraw one the office has already answered', cannotWithdraw.status === 400,
+  cannotWithdraw.data.error?.message);
+
 console.log(`\n${failures.length ? `${failures.length} of ${checks} checks FAILED:\n - ${failures.join('\n - ')}` : `All ${checks} checks passed.`}\n`);
 process.exit(failures.length ? 1 : 0);

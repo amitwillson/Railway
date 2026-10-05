@@ -22,12 +22,21 @@ import { all, get } from '../db/index.js';
  *   40  linked to this station in this department, area matches the unit
  *   50  linked to this station in this department (primary posting)
  *   55  linked to this station in this department (additional station)
+ *   57  the supervisor has named this station in their own jurisdiction
+ *   58  the supervisor has named the section this station is on
  *   60  divisional/default supervisor for this department
  *   70  any active supervisor in this department
  *
  * A supervisor who only covers the department as an additional link scores two
  * points worse than one whose primary department it is, so the person whose
  * department it actually is always wins a tie.
+ *
+ * The two jurisdiction scores sit deliberately between the links an administrator
+ * set and the departmental nomination. A supervisor says for themselves which
+ * sections and stations they look after (see lib/jurisdiction.js), which lets the
+ * routing find the right person where the division's record has a gap - but it
+ * can never outrank that record, so a self-declared claim cannot take work away
+ * from the officer the division actually nominated.
  */
 const SECONDARY_DEPARTMENT_PENALTY = 2;
 
@@ -79,6 +88,19 @@ export function findSupervisors({ stationId, unitId, departmentId, itemId, limit
     ids
   );
 
+  // What each candidate has said they cover, read once for the whole ranking.
+  const userIds = rows.map((r) => r.user_id).filter(Boolean);
+  const declared = userIds.length
+    ? all(
+        `SELECT user_id, kind, section, station_id, division_id FROM user_jurisdictions
+          WHERE active = 1 AND user_id IN (${userIds.map(() => '?').join(',')})`,
+        userIds
+      )
+    : [];
+  const station = stationId
+    ? get('SELECT id, name, section, division_id FROM stations WHERE id = ?', [stationId])
+    : null;
+
   const scored = rows.map((sup) => {
     const covers = coverage.filter((c) => c.supervisor_id === sup.id);
     const stations = stationLinks.filter((l) => l.supervisor_id === sup.id);
@@ -124,6 +146,19 @@ export function findSupervisors({ stationId, unitId, departmentId, itemId, limit
         reason = `Responsible for ${unit.name} at ${where}`;
       }
     }
+    // The supervisor's own statement of where they work. It only helps when the
+    // administrative record has nothing to say about this station.
+    if (station && sup.user_id && score > 55) {
+      const mine = declared.filter((d) => d.user_id === sup.user_id);
+      if (mine.some((d) => d.station_id === station.id)) {
+        score = 57;
+        reason = `Covers ${station.name} by their own jurisdiction (${departmentLabel})`;
+      } else if (station.section && mine.some((d) => d.section === station.section)) {
+        score = 58;
+        reason = `Covers the ${station.section} section by their own jurisdiction (${departmentLabel})`;
+      }
+    }
+
     for (const c of covers) {
       const sameStation = c.station_id != null && c.station_id === stationId;
       const globalStation = c.station_id == null;

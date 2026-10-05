@@ -100,12 +100,13 @@ npm run build:demo        # rebuild it from the current seed
 ### Tests
 
 ```bash
-npm test                    # 140 tests: 127 against the server, 13 against the offline backend
+npm test                    # 173 tests: 151 against the server, 22 against the offline backend
 npm run test:server         # engines, workflow, RBAC, sync, reports, TDC, supervisor links,
                             # suggested deficiencies, notes, station import, the inspection
-                            # sheet, the report and its issuing, and the schema migration
+                            # sheet, the report and its issuing, jurisdiction, feedback,
+                            # and the schema migration
 npm run test:demo           # the offline backend's own rules, asserted directly
-npm run smoke               # 84-check end-to-end walkthrough against a running server
+npm run smoke               # 101-check end-to-end walkthrough against a running server
 npm run check:demo          # drives the built offline file in a real browser from file://
 ```
 
@@ -211,6 +212,8 @@ Supervisor Master, best match first, and says *why* it matched:
 | 40 | Linked to this station, area of responsibility matches the unit |
 | 50 | Posted at this station in this department |
 | 55 | Covers this station in this department (a section link, not the posting) |
+| 57 | Names this station in their own jurisdiction |
+| 58 | Names the section this station sits on, in their own jurisdiction |
 | 60 | Nominated departmental supervisor |
 | 70 | Any active supervisor in the department |
 
@@ -222,6 +225,12 @@ Commercial and Operating. Someone who only *covers* a department ranks two point
 whose department it actually is, so the right person still wins a tie. Admin &rarr; Supervisors
 edits both sets of links; nothing is deleted, only deactivated, so observations already assigned
 keep pointing at a valid record.
+
+**A supervisor's own jurisdiction fills gaps, and only gaps.** Ranks 57 and 58 come from what the
+supervisor said about themselves (see *Where an officer works* below). They sit *below* every link
+an administrator recorded, so a self-declared claim can never take an observation away from the
+nominated supervisor &mdash; it only speaks where the division's record is silent, which is exactly
+where observations used to fall through to "any active supervisor in the department".
 
 If several supervisors qualify, the best is pre-selected and the rest stay in a searchable
 dropdown. If none exists, the observation is still recorded and the divisional office is told that
@@ -383,7 +392,7 @@ duplicate. The pending queue is visible and under the inspector's control.
   <img src="docs/screenshots/admin-masters.png" alt="Admin panel" width="760">
 </p>
 
-Twenty-four master tables are editable from the Admin Panel &mdash; stations, units, amenities,
+Thirty-one master tables are editable from the Admin Panel &mdash; stations, units, amenities,
 inspection items, suggested deficiencies, checklist parameters, departments, supervisors with their
 station and department links and their coverage, trains, contractors and licensees, severities,
 categories, TDC rules, notification rules and the escalation hierarchy. **Routine master-data
@@ -413,6 +422,67 @@ Every state-changing action writes an audit row with the user, role, timestamp, 
 the **previous and new value**. Submitted observations are never silently modified: the text can be
 corrected only by the raising officer before acknowledgement (or by an administrator), and every
 correction is recorded on the timeline and in the audit trail.
+
+### 11. Where an officer works
+
+A division has eight sections and eighty-nine stations, and no inspector works all of them equally.
+Every inspector and every supervisor says for themselves which sections and which stations they
+cover, under **Profile &rarr; My jurisdiction**, and the screens then lead with their own patch
+instead of the whole division.
+
+The picker is built around the section, because that is the unit officers actually think in. Pick a
+section and it brings in its stations; open it and name individual stations where a patch does not
+follow the section neatly. One choice can be marked as the one the screens default to.
+
+<p align="center">
+  <img src="docs/screenshots/jurisdiction-picker.png" alt="Choosing the sections and stations an officer covers" width="340">
+</p>
+
+The hierarchy is drawn rather than enforced. A section the whole division already covers, or a
+station a chosen section already brings in, is shown as **covered** &mdash; dashed and muted, so it
+cannot be mistaken for something individually picked. It stays tickable, because naming it outright
+still says something: it is this officer's own patch, it can be the default the screens open on,
+and for a supervisor it is a closer claim than the wider one.
+
+**It does not override the division's record.** This is the part worth being careful about. The
+Concerned Supervisor Master, maintained by an administrator, remains the authority for who answers
+for what. A self-declared jurisdiction ranks *below* it (57 and 58 against 55 and better), so it can
+fill a gap but never take work away from the nominated supervisor. The screen says so plainly,
+because a supervisor ticking a station needs to know what it does and what it does not do. Every row
+records whether the officer or an administrator set it, and who; an administrator can set another
+officer's jurisdiction, and it is marked as administrator-set.
+
+Nothing is deleted. A section an officer stops covering is deactivated, so an observation routed
+under it still points at a record that can be read.
+
+### 12. What the people using it think of it
+
+An inspector knows what slowed them down at the moment they finish an inspection. A week later they
+do not, and a form nobody is looking at collects nothing. So the question is asked at the end of the
+inspection, in the sheet that completes it:
+
+<p align="center">
+  <img src="docs/screenshots/feedback-finish.png" alt="Asking what would make the inspection easier, at the point of completing it" width="340">
+</p>
+
+It is deliberately out of the way: one quiet line the officer can ignore entirely, and completing
+the inspection never waits on it. The same box sits on the profile screen, so a supervisor who never
+runs an inspection can still answer it.
+
+What comes in is grouped by kind (a suggestion, something that got in the way, something that works
+well) and by the part of the application it is about, and ties itself to the inspection it came out
+of &mdash; which is what makes it answerable rather than anecdotal. The divisional office reads it
+under **Admin &rarr; Feedback**, replies, and moves it through *read*, *planned*, *done* or *not
+taken up*; the officer sees the reply against what they said.
+
+<p align="center">
+  <img src="docs/screenshots/feedback-inbox.png" alt="The divisional office reading and answering what officers have said" width="760">
+</p>
+
+A reply never edits the suggestion, and neither does the Admin Panel: `suggestion` is deliberately
+not one of the fields the generic master editor exposes, so an officer's own sentence cannot be
+rewritten or reattributed from there either. The author can withdraw what they said while it is
+unanswered, and not after &mdash; once the office has responded, both halves stay on the record.
 
 ---
 
@@ -451,6 +521,10 @@ module an observation belongs to, so additional modules and departments need no 
 | Inspecting Officer | Create inspections and observations, assign, verify compliance |
 | Supervisor | See assigned observations, acknowledge, submit compliance |
 | Viewer | Read-only |
+
+Inspectors and supervisors also choose their own jurisdiction, and anybody can suggest an
+improvement to the application; answering a suggestion, and setting somebody else's jurisdiction,
+are the divisional officer's and the administrator's.
 
 Access is enforced on the server in two layers: a capability check per endpoint, and a row-level
 scope (a supervisor sees the observations assigned to them or to their department at their station;

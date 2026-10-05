@@ -31,6 +31,10 @@ Errors always use the same shape:
 | Dashboards, reports | ✓ | ✓ | ✓ | ✓ | ✓ |
 | Master data (read) | ✓ | ✓ | ✓ | ✓ | ✓ |
 | Master data (write), users, settings | ✓ | | | | |
+| Choose own jurisdiction | ✓ | ✓ | ✓ | ✓ | |
+| Set another officer's jurisdiction | ✓ | | | | |
+| Suggest an application improvement | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Answer a suggestion | ✓ | ✓ | | | |
 | Audit trail | ✓ | ✓ | | | |
 
 Row-level scope: a supervisor sees observations assigned to them, or to their department at their
@@ -204,6 +208,27 @@ were issued, while the status of each observation it cites is read live.
 | GET | `/sync/snapshot` | Master-data bundle for offline use |
 | POST | `/sync/batch` | Up to 100 operations; each carries a `client_uuid` and is idempotent. An observation may reference its parent by `inspection_client_uuid` when the inspection was also created offline. Per-item results report `created`, `duplicate` or `failed` without losing the rest of the batch |
 | GET | `/sync/status` | Server time and the caller's open count |
+
+## The officer's own profile
+
+Where an officer works, and what they think of the application. Both are the officer's own: no
+administrator is needed to set a jurisdiction, and nothing rewrites what was said about the app.
+
+| Method | Path | Notes |
+| --- | --- | --- |
+| GET | `/profile/jurisdiction` | What I cover now, how many stations that works out to, and every section, station and division I could choose from |
+| PUT | `/profile/jurisdiction` | Replaces it. `sections` (codes), `stations` (ids), `divisions` (ids) and an optional `primary` `{kind, value}` the screens default to. What is not re-chosen is stood down, never deleted |
+| GET | `/profile/jurisdiction/:userId` | Another officer's. Any divisional officer or administrator; an inspector may only read their own |
+| PUT | `/profile/jurisdiction/:userId` | Administrator only. Recorded with `source: 'admin'` and the administrator who set it |
+| GET | `/profile/feedback` | Mine. For an officer or administrator, everybody's, with a `summary` of where they stand. `mine`, `status`, `kind`, `inspection_id`, `limit` |
+| POST | `/profile/feedback` | `suggestion` (at least 5 characters), `kind` (`suggestion`, `problem`, `praise`), optional `area` and `inspection_id` |
+| PATCH | `/profile/feedback/:id` | Officer or administrator. Sets `status` (`new`, `noted`, `planned`, `done`, `declined`) and a `response`. Never edits the suggestion itself |
+| DELETE | `/profile/feedback/:id` | The author withdraws what they said. Refused once the office has answered it |
+
+A jurisdiction is the officer's own statement, and never overrides the division's record.
+`supervisor_stations` and `supervisor_departments` stay the authority for who answers for what, so a
+self-declared claim ranks **below** an administrator's link in the assignment engine and can only
+fill a gap where that record is silent. See *Smart assignment* in the README for the order.
 
 ## Administration
 

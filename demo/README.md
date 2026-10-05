@@ -12,7 +12,7 @@ Sign in with any of these (the sign-in screen lists them all), password `Railway
 | `CMI01` | Inspecting officer | New Inspection, repeated-deficiency warning, verification queue |
 | `SSEEL01` | Supervisor | Compliance queue, acknowledge and submit compliance |
 | `SRDCM01` | Divisional officer | Dashboards, station history, reports |
-| `ADMIN01` | Administrator | Admin panel over all 27 masters, supervisor links, station import, audit trail |
+| `ADMIN01` | Administrator | Admin panel over all 31 masters, supervisor links, station import, audit trail |
 
 ## Suggested walkthrough
 
@@ -53,6 +53,15 @@ Sign in with any of these (the sign-in screen lists them all), password `Railway
 12. **`ADMIN01` &rarr; Admin &rarr; Supervisors** to see which stations and departments each
     supervisor answers for, and **Master data &rarr; Station &rarr; Import** to paste a CSV and press
     *Check* &mdash; it reports what would change without writing anything.
+13. **Profile &rarr; My jurisdiction** on any inspector or supervisor account. The officer says which
+    sections and stations they work. Untick *Bilaspur division*, pick a section or two, open one and
+    name a station outright. What a wider choice already covers is drawn dashed and muted, so it
+    cannot be mistaken for something individually picked &mdash; but it is still tickable, because
+    naming it outright makes it the officer's own and lets it be the default the screens open on.
+    Nothing chosen here overrides the division's record of who answers for what; the screen says so.
+14. **Finish any inspection** and the completion sheet asks what would make it easier, under the
+    signature. It is optional and completing never waits on it. `SRDCM01` or `ADMIN01` reads what
+    came in under **Admin &rarr; Feedback**, with the inspection each one came out of, and replies.
 
 ## What is real and what is not
 

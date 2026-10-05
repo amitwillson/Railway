@@ -9,6 +9,7 @@ import {
   Badge, Banner, Button, Card, EmptyState, Field, Loading, Sheet, SignaturePad, Tabs,
 } from '../components/ui';
 import { AreaSummary, CoverageStrip, PreviousReview } from '../components/InspectionSheet';
+import FeedbackBox from '../components/FeedbackBox';
 import { formatDate, formatDateTime, moduleTone, titleCase } from '../lib/format';
 import type { Approval, Inspection, InspectionReport, Observation } from '../api/types';
 
@@ -343,6 +344,10 @@ export default function InspectionDetail() {
           <Field label="Digital signature" hint="Optional">
             <SignaturePad onChange={setSignature} />
           </Field>
+
+          {/* The end of an inspection is when an officer knows what slowed them
+              down. It is optional and does not stand between them and finishing. */}
+          <FeedbackBox inspectionId={data.id} compact />
         </Sheet>
       )}
     </div>

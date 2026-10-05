@@ -454,8 +454,12 @@ img { max-width: 100%; display: block; }
   background: var(--surface); color: var(--ink-2);
   font-size: 0.8rem; font-weight: 550; cursor: pointer; white-space: nowrap;
 }
-.chip:hover { background: var(--surface-3); }
+/* A plain .chip:hover is the more specific rule, so it would pale the background
+   of a selected chip while the text stayed white, leaving it unreadable under the
+   cursor. Hence the :not(): a selected chip keeps its accent and dims instead. */
+.chip:not(.chip--on):hover { background: var(--surface-3); }
 .chip--on { background: var(--accent); border-color: var(--accent); color: var(--on-accent); font-weight: 650; }
+.chip--on:hover { opacity: 0.9; }
 .chip--count::after {
   content: attr(data-count); margin-left: 3px; padding: 0 5px;
   background: rgba(0, 0, 0, 0.09); border-radius: var(--r-pill); font-size: 0.72rem;
@@ -998,3 +1002,11 @@ table.data a { font-weight: 600; }
 .setup > summary::-webkit-details-marker { display: none; }
 .setup > summary::after { content: ' · change'; font-weight: 600; color: var(--accent); }
 .setup[open] > summary::after { content: ' · hide'; }
+
+/* Covered by a wider choice already, so ticking it adds no station - but it
+   still says "this one is mine", which is why it stays clickable. */
+.chip--covered {
+  background: var(--surface-2); border-style: dashed; color: var(--muted);
+  opacity: 0.8;
+}
+.chip--covered:hover { opacity: 1; border-style: solid; }

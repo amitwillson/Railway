@@ -82,6 +82,20 @@ export function findSupervisors({
         reason = `Responsible for ${unit.name} at ${where_}`;
       }
     }
+    // The supervisor's own statement of where they work, mirroring the server:
+    // it only speaks where the division's record is silent, and ranks below it.
+    if (stationId && sup.user_id && score > 55) {
+      const here = byId('stations', stationId);
+      const mine = where('user_jurisdictions', (j) => j.active && j.user_id === sup.user_id);
+      if (mine.some((j) => j.station_id === stationId)) {
+        score = 57;
+        reason = `Covers ${here?.name ?? 'this station'} by their own jurisdiction (${departmentLabel})`;
+      } else if (here?.section && mine.some((j) => j.section === here.section)) {
+        score = 58;
+        reason = `Covers the ${here.section} section by their own jurisdiction (${departmentLabel})`;
+      }
+    }
+
     for (const c of coverage.filter((row) => row.supervisor_id === sup.id)) {
       const sameStation = c.station_id != null && c.station_id === stationId;
       const globalStation = c.station_id == null;

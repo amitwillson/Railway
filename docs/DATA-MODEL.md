@@ -27,7 +27,14 @@ ISO-8601 UTC strings; plain dates are `YYYY-MM-DD`. Foreign keys are enforced.
 | `supervisor_stations` | **Which stations a supervisor answers for.** The primary posting is one of these rows (`is_primary = 1`); the rest are the section they cover, which is how one SSE reaches every station on it |
 | `supervisor_departments` | **Which departments a supervisor answers for.** Same shape: the department on the supervisor row is the primary link, further links let a Station Manager answer for Commercial and Operating alike |
 | `supervisor_coverage` | Explicit responsibility: supervisor × station × unit (or unit kind, or item group) with a priority. Read first by the assignment engine |
+| `user_jurisdictions` | **Where an officer says they work.** One row per claim: a whole division, a section, or a single station, with `is_primary` marking the one the screens default to. `source` says whether the officer or an administrator set it, and `set_by` who. Rows are deactivated rather than deleted, so a claim an observation was routed under stays readable. Partial unique indexes keep it to one live row per officer per division, section and station &mdash; SQLite treats NULLs as distinct, so a plain `UNIQUE` would not |
+| `app_feedback` | **What the people using the application think of it.** The author, the inspection it came out of where it did, its kind (`suggestion`, `problem`, `praise`), the part of the app it is about, the text itself, and the office's `status` and `response`. The suggestion is never edited by the reply |
 | `audit_log` | User, role, action, entity, previous value, new value, IP, user agent, timestamp |
+
+A jurisdiction is a *statement*, not an authority. `supervisor_stations` and
+`supervisor_departments` are the division's own record of who answers for what, maintained by an
+administrator, and they stay the authority: a self-declared claim ranks below them in the assignment
+engine, so it can fill a gap but never take an observation away from the nominated supervisor.
 
 ## Inspection catalogue
 

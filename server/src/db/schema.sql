@@ -214,6 +214,48 @@ CREATE INDEX IF NOT EXISTS idx_users_role ON users(role);
 CREATE INDEX IF NOT EXISTS idx_users_division ON users(division_id);
 
 -- One-time passwords for OTP login
+-- What an officer covers, chosen by the officer themselves.
+--
+-- The division's own record of who answers for what lives in supervisor_stations
+-- and supervisor_departments, and an administrator maintains it. This table is
+-- the officer's own statement of where they work: an inspector says which
+-- sections and stations they inspect, a supervisor says which they look after.
+--
+-- It is kept apart from the administrative record on purpose. For an inspector it
+-- is a working preference and nothing more - it decides what the screens offer
+-- first. For a supervisor it also reaches the assignment engine, but always below
+-- the links an administrator set, so a self-declared claim can fill a gap in the
+-- record without ever outranking the division's own nomination. `source` says
+-- which it is, and `set_by` says who last changed it.
+CREATE TABLE IF NOT EXISTS user_jurisdictions (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  kind        TEXT NOT NULL CHECK (kind IN ('division','section','station')),
+  division_id INTEGER REFERENCES divisions(id) ON DELETE CASCADE,
+  section     TEXT,                              -- section code, see sections
+  station_id  INTEGER REFERENCES stations(id) ON DELETE CASCADE,
+  is_primary  INTEGER NOT NULL DEFAULT 0,        -- the one the screens default to
+  source      TEXT NOT NULL DEFAULT 'self'
+              CHECK (source IN ('self','admin')),
+  set_by      INTEGER REFERENCES users(id),
+  active      INTEGER NOT NULL DEFAULT 1,
+  created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  updated_at  TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_juris_user ON user_jurisdictions(user_id);
+CREATE INDEX IF NOT EXISTS idx_juris_station ON user_jurisdictions(station_id);
+CREATE INDEX IF NOT EXISTS idx_juris_section ON user_jurisdictions(section);
+-- SQLite treats NULLs as distinct in a UNIQUE constraint, so one row per kind is
+-- enforced with partial indexes rather than a composite UNIQUE that would let
+-- duplicates through.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_juris_one_station
+  ON user_jurisdictions(user_id, station_id) WHERE station_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_juris_one_section
+  ON user_jurisdictions(user_id, section) WHERE section IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_juris_one_division
+  ON user_jurisdictions(user_id, division_id)
+  WHERE division_id IS NOT NULL AND station_id IS NULL AND section IS NULL;
+
 CREATE TABLE IF NOT EXISTS otp_codes (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
   user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -885,6 +927,32 @@ CREATE TABLE IF NOT EXISTS inspection_note_observations (
 );
 CREATE INDEX IF NOT EXISTS idx_note_obs_note ON inspection_note_observations(note_id);
 CREATE INDEX IF NOT EXISTS idx_note_obs_obs ON inspection_note_observations(observation_id);
+
+-- What the people using this application think of it.
+--
+-- Offered at the end of an inspection, because that is the moment an inspector
+-- knows what slowed them down, and from the profile screen so that a supervisor
+-- who never runs an inspection can still say something. It is the officer's own
+-- words: the office answers on the record rather than editing what was said.
+CREATE TABLE IF NOT EXISTS app_feedback (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id       INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  inspection_id INTEGER REFERENCES inspections(id) ON DELETE SET NULL,
+  kind          TEXT NOT NULL DEFAULT 'suggestion'
+                CHECK (kind IN ('suggestion','problem','praise')),
+  area          TEXT,                            -- the part of the app it is about
+  suggestion    TEXT NOT NULL,
+  status        TEXT NOT NULL DEFAULT 'new'
+                CHECK (status IN ('new','noted','planned','done','declined')),
+  response      TEXT,
+  responded_by  INTEGER REFERENCES users(id),
+  responded_at  TEXT,
+  created_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  updated_at    TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_feedback_user ON app_feedback(user_id);
+CREATE INDEX IF NOT EXISTS idx_feedback_status ON app_feedback(status);
+CREATE INDEX IF NOT EXISTS idx_feedback_inspection ON app_feedback(inspection_id);
 
 CREATE TABLE IF NOT EXISTS report_tokens (
   token        TEXT PRIMARY KEY,

@@ -23,6 +23,7 @@ import notificationRoutes from './routes/notifications.js';
 import searchRoutes from './routes/search.js';
 import syncRoutes from './routes/sync.js';
 import adminRoutes from './routes/admin.js';
+import profileRoutes from './routes/profile.js';
 import fileRoutes from './routes/files.js';
 
 export function createApp() {
@@ -122,6 +123,7 @@ export function createApp() {
   app.use('/api/notifications', notificationRoutes);
   app.use('/api/search', searchRoutes);
   app.use('/api/sync', syncRoutes);
+  app.use('/api/profile', profileRoutes);
   app.use('/api/admin', adminRoutes);
   app.use('/api/files', fileRoutes);
 

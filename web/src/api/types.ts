@@ -454,6 +454,66 @@ export interface RepeatResult {
   message: string | null; item_name?: string | null; unit_name?: string | null;
 }
 
+/* -------------------------------------------------------------------------- */
+/* What an officer covers, and what they think of the application             */
+/* -------------------------------------------------------------------------- */
+
+export type JurisdictionKind = 'division' | 'section' | 'station';
+
+/**
+ * One line of an officer's jurisdiction. `source` says whether the officer chose
+ * it or an administrator set it - a self-declared claim ranks below the
+ * division's own record in the assignment engine, never above it.
+ */
+export interface Jurisdiction {
+  id: number; user_id: number; kind: JurisdictionKind;
+  division_id: number | null; division_name: string | null; division_code: string | null;
+  section: string | null; section_name: string | null;
+  station_id: number | null; station_name: string | null; station_code: string | null;
+  station_section: string | null;
+  is_primary: boolean; source: 'self' | 'admin';
+  set_by: number | null; set_by_name: string | null;
+  active: boolean; created_at: string; updated_at: string | null;
+}
+
+export interface JurisdictionChoices {
+  sections: { code: string; name: string; division_id: number | null; station_count: number }[];
+  stations: { id: number; code: string; name: string; section: string | null; category: string | null; station_type: string | null; km: number | null }[];
+  divisions: { id: number; code: string; name: string }[];
+}
+
+export interface JurisdictionPayload {
+  user: { id: number; name: string; role: string; designation: string | null };
+  data: Jurisdiction[];
+  stations_covered: number;
+  choices?: JurisdictionChoices;
+}
+
+export type FeedbackKind = 'suggestion' | 'problem' | 'praise';
+export type FeedbackStatus = 'new' | 'noted' | 'planned' | 'done' | 'declined';
+
+export interface Feedback {
+  id: number; user_id: number | null; user_name: string | null;
+  user_designation: string | null; user_role: string | null;
+  inspection_id: number | null; inspection_ref: string | null; inspection_title: string | null;
+  kind: FeedbackKind; area: string | null; suggestion: string;
+  status: FeedbackStatus; response: string | null;
+  responded_by: number | null; responded_by_name: string | null; responded_at: string | null;
+  created_at: string; updated_at: string | null;
+}
+
+export interface FeedbackPayload {
+  data: Feedback[];
+  summary?: {
+    total: number;
+    by_status: Record<FeedbackStatus, number>;
+    by_kind: Record<FeedbackKind, number>;
+    open: number;
+  };
+  statuses: FeedbackStatus[];
+  kinds: FeedbackKind[];
+}
+
 export interface Approval {
   id: number; approval_role: string; user_name: string; designation: string | null;
   remarks: string | null; signature_data: string | null; signed_at: string;

@@ -146,6 +146,7 @@ function resetDatabase() {
     'station_amenity_norms', 'station_facilities',
     'supervisor_coverage', 'supervisor_stations', 'supervisor_departments',
     'inspection_note_observations', 'inspection_notes', 'item_deficiencies',
+    'app_feedback', 'user_jurisdictions',
     'supervisors', 'otp_codes', 'sessions', 'audit_log',
     'contractors', 'rule_references', 'notification_rules', 'escalation_levels',
     'tdc_rules', 'settings', 'severities', 'observation_categories', 'item_parameters',
@@ -671,12 +672,89 @@ function seedPeople(ref) {
     });
   }
 
+  const jurisdictions = seedJurisdictions();
+
   log(
     `  people: ${userIds.size} user accounts, ${supervisorIds.size} supervisors, ` +
       `${linkCount} station/department links, ${coverageCount} coverage mappings, ` +
-      `${contractors.length} contractors/licensees`
+      `${contractors.length} contractors/licensees, ${jurisdictions} jurisdiction rows`
   );
   return { userIds, supervisorIds };
+}
+
+/**
+ * Gives every inspector and every supervisor a starting jurisdiction.
+ *
+ * A supervisor's is read from what the division has already recorded against them
+ * in supervisor_stations, so the officer opens the screen and finds their own
+ * patch already there to adjust rather than an empty page. An inspector has no
+ * such record, so they get the sections their posting sits on. Both are marked
+ * `admin`, because this is the division's starting position and not something the
+ * officer has said yet.
+ */
+function seedJurisdictions() {
+  let rows = 0;
+  const add = (userId, values) => {
+    insert('user_jurisdictions', {
+      user_id: userId,
+      source: 'admin',
+      set_by: null,
+      active: 1,
+      ...values,
+    });
+    rows += 1;
+  };
+
+  for (const user of all("SELECT * FROM users WHERE active = 1 AND role IN ('inspector','supervisor')")) {
+    const supervisor = get('SELECT * FROM supervisors WHERE user_id = ? AND active = 1', [user.id]);
+    const sections = new Set();
+    const stations = new Set();
+
+    if (supervisor) {
+      // What the division has recorded against this supervisor.
+      for (const link of all(
+        `SELECT ss.station_id, st.section FROM supervisor_stations ss
+           JOIN stations st ON st.id = ss.station_id
+          WHERE ss.supervisor_id = ? AND ss.active = 1`,
+        [supervisor.id]
+      )) {
+        if (link.section) sections.add(link.section);
+        else stations.add(link.station_id);
+      }
+      if (supervisor.station_id) {
+        const posted = get('SELECT section FROM stations WHERE id = ?', [supervisor.station_id]);
+        if (posted?.section) sections.add(posted.section);
+        else stations.add(supervisor.station_id);
+      }
+    }
+
+    // An inspecting officer is not tied to a section the way a supervisor is: a
+    // Chief Commercial Inspector inspects anywhere in the division. So they start
+    // with the division and narrow it to their own patch themselves, which is what
+    // the screen is for.
+    if (!supervisor) {
+      if (user.division_id) add(user.id, { kind: 'division', division_id: user.division_id, is_primary: 1 });
+      continue;
+    }
+    if (sections.size === 0 && stations.size === 0) {
+      if (user.division_id) add(user.id, { kind: 'division', division_id: user.division_id, is_primary: 1 });
+      continue;
+    }
+
+    let first = true;
+    for (const section of sections) {
+      add(user.id, { kind: 'section', section, division_id: user.division_id ?? null, is_primary: first ? 1 : 0 });
+      first = false;
+    }
+    for (const stationId of stations) {
+      // A station already inside one of the sections above needs no row of its own.
+      const station = get('SELECT section FROM stations WHERE id = ?', [stationId]);
+      if (station?.section && sections.has(station.section)) continue;
+      add(user.id, { kind: 'station', station_id: stationId, is_primary: first ? 1 : 0 });
+      first = false;
+    }
+  }
+  return rows;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -1751,6 +1829,75 @@ async function seedDemo(ref, itemIds, ids) {
     issueReport(row.id, inspection.inspector_id);
     update('inspections', row.id, { report_issued_at: issuedAt, updated_at: issuedAt });
   }
+
+  // What the people using it have said about it. Offered at the end of an
+  // inspection, so the demonstration carries a few against real inspections.
+  const feedbackSeed = [
+    {
+      employee_id: 'CMI01',
+      kind: 'suggestion',
+      area: 'Inspection sheet',
+      suggestion:
+        'On a long platform it would help if the sheet remembered which area I had open when I come back '
+          + 'from recording a deficiency, instead of collapsing everything.',
+      status: 'planned',
+      response: 'Agreed. It will keep the area open after a deficiency is recorded.',
+    },
+    {
+      employee_id: 'CMI02',
+      kind: 'problem',
+      area: 'Offline',
+      suggestion:
+        'At the smaller halts there is no signal at all. The deficiencies save, but the area sheet does not '
+          + 'open until I am back on the network, so I cannot tick off what I found in order.',
+      status: 'noted',
+      response: 'The sheet now opens on the server as the inspection syncs. Caching it on the device is being looked at.',
+    },
+    {
+      employee_id: 'TI01',
+      kind: 'suggestion',
+      area: 'On-train inspection',
+      suggestion: 'A coach number keypad would be quicker than typing S-5 each time.',
+      status: 'new',
+    },
+    {
+      employee_id: 'SSEEN01',
+      kind: 'praise',
+      area: 'Compliance',
+      suggestion:
+        'The photograph against each observation saves a telephone call. I can see what was wrong before I send anybody.',
+      status: 'noted',
+    },
+    {
+      employee_id: 'SMBSP01',
+      kind: 'suggestion',
+      area: 'Notifications',
+      suggestion: 'A daily digest at 08:00 would suit better than a message for each observation.',
+      status: 'new',
+    },
+  ];
+  let feedbackCount = 0;
+  for (const entry of feedbackSeed) {
+    const user = get('SELECT id FROM users WHERE employee_id = ?', [entry.employee_id]);
+    if (!user) continue;
+    const inspection = get(
+      'SELECT id FROM inspections WHERE inspector_id = ? ORDER BY COALESCE(started_at, created_at) DESC LIMIT 1',
+      [user.id]
+    );
+    insert('app_feedback', {
+      user_id: user.id,
+      inspection_id: inspection?.id ?? null,
+      kind: entry.kind,
+      area: entry.area,
+      suggestion: entry.suggestion,
+      status: entry.status,
+      response: entry.response ?? null,
+      responded_by: entry.response ? get("SELECT id FROM users WHERE employee_id = 'SRDCM01'")?.id ?? null : null,
+      responded_at: entry.response ? nowIso() : null,
+    });
+    feedbackCount += 1;
+  }
+  if (feedbackCount) log(`  feedback: ${feedbackCount} suggestions from the people using it`);
 
   // Part I of a report is the review of what the previous inspection of that place
   // left outstanding. The inspection still in progress carries that review, which

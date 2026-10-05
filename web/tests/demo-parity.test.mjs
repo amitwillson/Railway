@@ -262,6 +262,120 @@ describe('the offline backend refuses what the server refuses', () => {
 });
 
 /* -------------------------------------------------------------------------- */
+/* Jurisdiction and feedback                                                  */
+/* -------------------------------------------------------------------------- */
+
+describe('an officer says where they work', () => {
+  test('the picker offers the division\'s own sections and stations', () => {
+    const payload = call('GET', '/profile/jurisdiction');
+    assert.ok(payload.choices.sections.length > 0);
+    assert.ok(payload.choices.stations.length > 0);
+    // Each section says how many stations it carries, so the choice is informed.
+    assert.ok(payload.choices.sections.every((s) => typeof s.station_count === 'number'));
+  });
+
+  test('choosing a section covers its stations, and re-choosing stands down the rest', () => {
+    const payload = call('GET', '/profile/jurisdiction');
+    const [first, second] = payload.choices.sections;
+    const saved = call('PUT', '/profile/jurisdiction', {
+      body: { sections: [first.code, second.code], primary: { kind: 'section', value: first.code } },
+    });
+    assert.equal(saved.stations_covered, first.station_count + second.station_count);
+    assert.ok(saved.data.every((r) => r.source === 'self'));
+    assert.equal(saved.data.find((r) => r.is_primary).section, first.code);
+
+    const narrowed = call('PUT', '/profile/jurisdiction', { body: { sections: [first.code] } });
+    assert.equal(narrowed.data.length, 1);
+    assert.equal(narrowed.stations_covered, first.station_count);
+  });
+
+  test('a section or station that does not exist is refused', () => {
+    assert.match(
+      refusal(() => call('PUT', '/profile/jurisdiction', { body: { sections: ['NOPE'] } })).message,
+      /Unknown section/i
+    );
+    assert.match(
+      refusal(() => call('PUT', '/profile/jurisdiction', { body: { stations: [999999] } })).message,
+      /Unknown station/i
+    );
+  });
+
+  test('one officer cannot set another officer\'s jurisdiction', () => {
+    // A supervisor who has a login of their own, read from the station they answer
+    // for - an inspector has no admin route to look users up with, which is the point.
+    const station = call('GET', '/masters/stations?q=bilaspur').data[0];
+    const someoneElse = call('GET', `/masters/stations/${station.id}`).supervisors.find((s) => s.user_id);
+    assert.ok(someoneElse, 'the demonstration data must carry a supervisor with a login');
+    const error = refusal(() =>
+      call('PUT', `/profile/jurisdiction/${someoneElse.user_id}`, { body: { sections: [] } })
+    );
+    assert.equal(error?.status, 403);
+  });
+});
+
+describe('saying what would make the application easier', () => {
+  test('a suggestion is recorded against the inspection it came out of', () => {
+    const inspection = call('GET', '/inspections?page_size=1').data[0];
+    const created = call('POST', '/profile/feedback', {
+      body: {
+        suggestion: 'Parity check: the area sheet should keep my place when I record a deficiency.',
+        kind: 'suggestion',
+        area: 'Inspection sheet',
+        inspection_id: inspection.id,
+      },
+    });
+    assert.equal(created.status, 'new');
+    assert.equal(created.inspection_id, inspection.id);
+    assert.ok(created.inspection_ref);
+    assert.ok(created.user_name);
+  });
+
+  test('a one-word answer is refused', () => {
+    assert.equal(refusal(() => call('POST', '/profile/feedback', { body: { suggestion: 'ok' } }))?.status, 400);
+  });
+
+  test('an inspector sees only their own, and cannot answer it', () => {
+    const list = call('GET', '/profile/feedback');
+    assert.ok(list.data.length > 0);
+    assert.equal(list.summary, undefined, 'an inspector does not get the office counters');
+    const error = refusal(() => call('PATCH', `/profile/feedback/${list.data[0].id}`, { body: { status: 'done' } }));
+    assert.equal(error?.status, 403);
+  });
+
+  test('the office sees everybody\'s and replies without rewriting what was said', () => {
+    const officer = login('SRDCM01');
+    const list = handle({
+      method: 'GET', path: '/profile/feedback', query: new URLSearchParams(), token: officer, body: null,
+    });
+    assert.ok(list.summary.total > 1);
+    const target = list.data.find((f) => !f.response);
+    const original = target.suggestion;
+    const answered = handle({
+      method: 'PATCH',
+      path: `/profile/feedback/${target.id}`,
+      query: new URLSearchParams(),
+      token: officer,
+      body: { status: 'planned', response: 'Parity check: noted and planned.' },
+    });
+    assert.equal(answered.status, 'planned');
+    assert.equal(answered.suggestion, original, "the officer's own words are not rewritten");
+    assert.ok(answered.responded_by_name);
+  });
+
+  test('the author may withdraw what they said, until it has been answered', () => {
+    const fresh = call('POST', '/profile/feedback', {
+      body: { suggestion: 'Parity check: on reflection this was not worth raising.' },
+    });
+    assert.equal(call('DELETE', `/profile/feedback/${fresh.id}`).status, 'declined');
+
+    const answered = call('GET', '/profile/feedback').data.find((f) => f.response);
+    if (answered) {
+      assert.match(refusal(() => call('DELETE', `/profile/feedback/${answered.id}`)).message, /already been answered/i);
+    }
+  });
+});
+
+/* -------------------------------------------------------------------------- */
 /* The report reads the same as the server's                                  */
 /* -------------------------------------------------------------------------- */
 

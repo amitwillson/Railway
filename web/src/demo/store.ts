@@ -29,6 +29,7 @@ const TABLES = [
   'contractors', 'tdc_rules', 'notification_rules', 'escalation_levels',
   'settings', 'supervisors', 'supervisor_coverage', 'supervisor_stations',
   'supervisor_departments', 'item_deficiencies', 'users',
+  'user_jurisdictions', 'app_feedback',
   'inspections', 'inspection_areas', 'inspection_item_results',
   'inspection_previous_reviews', 'observations', 'attachments', 'compliances',
   'inspection_notes', 'inspection_note_observations',

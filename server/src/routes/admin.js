@@ -109,6 +109,12 @@ const RESOURCES = {
     columns: ['supervisor_id', 'station_id', 'unit_id', 'unit_kind', 'item_group_id', 'priority', 'active'],
     order: 'priority',
   },
+  user_jurisdictions: { table: 'user_jurisdictions', label: 'Officer jurisdiction', columns: ['user_id', 'kind', 'division_id', 'section', 'station_id', 'is_primary', 'source', 'set_by', 'active'], order: 'user_id, kind' },
+  // What an officer said about the application is their own statement, attributed
+  // to them by name, so this editor triages it and never rewrites it: `suggestion`,
+  // `user_id` and `inspection_id` are deliberately not editable here. The office
+  // answers it under Admin -> Feedback, which records who replied and when.
+  app_feedback: { table: 'app_feedback', label: 'Application feedback', columns: ['kind', 'area', 'status', 'response'], search: ['suggestion', 'response'], order: 'created_at DESC' },
   inspection_areas: { table: 'inspection_areas', label: 'Inspection area (sheet row)', columns: ['inspection_id', 'unit_id', 'unit_name', 'unit_kind', 'coach', 'result', 'remarks', 'sort_order'], order: 'inspection_id DESC, sort_order' },
   inspection_item_results: { table: 'inspection_item_results', label: 'Inspection item result', columns: ['inspection_id', 'inspection_area_id', 'unit_id', 'item_id', 'item_name', 'group_name', 'result', 'remarks', 'observation_id'], order: 'inspection_id DESC, id' },
   inspection_previous_reviews: { table: 'inspection_previous_reviews', label: 'Previous-inspection review', columns: ['inspection_id', 'observation_id', 'finding', 'remarks', 'reviewed_by'], order: 'inspection_id DESC, id' },

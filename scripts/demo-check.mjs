@@ -225,7 +225,71 @@ const reportsText = (await page.locator('body').textContent()) ?? '';
 check('the reports built on the inspection are offered', reportsText.includes('Inspection Register'));
 check('they are separated from those built on the observations', reportsText.includes('Based on the observations'));
 
-heading('7. Nothing left the machine');
+heading('7. Where the officer works, and what they think of the app');
+await page.goto(`file://${FILE}#/profile`);
+await settle(2000);
+const profileText = (await page.locator('body').textContent()) ?? '';
+check('the profile offers a jurisdiction to choose', profileText.includes('My jurisdiction'));
+check('and says the division\'s own record still decides', profileText.includes('kept separately by the office'));
+
+// Narrowing from the whole division down to one section, which is the flow an
+// inspector covering everything actually uses.
+const divisionChip = page.locator('.chip--on').filter({ hasText: /division$/ });
+if (await divisionChip.count()) {
+  await divisionChip.first().click();
+  await settle(500);
+}
+const sectionChip = page.locator('.sheet-group .chip').filter({ hasText: /^[A-Z]{3,4}-[A-Z]{3,4}$/ }).first();
+const sectionCode = (await sectionChip.textContent())?.trim();
+await sectionChip.click();
+await settle(500);
+check('a section can be picked', (await sectionChip.getAttribute('class'))?.includes('chip--on') ?? false, sectionCode);
+
+// The stations the section brings in read as covered, not as individually picked.
+await page.locator('.chart__toggle').filter({ hasText: 'Stations' }).first().click();
+await settle(600);
+const coveredCount = await page.locator('.sheet-group .chip--covered').count();
+check('its stations read as covered rather than as picked', coveredCount > 0, `${coveredCount} stations`);
+
+// But one can still be named outright, which is what makes it available as a default.
+const firstCovered = page.locator('.sheet-group .chip--covered').first();
+const stationName = (await firstCovered.textContent())?.trim();
+await firstCovered.click();
+await settle(500);
+check('a covered station can still be named outright',
+  (await page.locator('.sheet-group .chip--xs.chip--on').count()) > 0, stationName);
+
+await page.getByRole('button', { name: /Save jurisdiction/i }).click();
+await settle(1500);
+await sampleToasts();
+check('saving it goes through', errorToasts.length === 0, errorToasts.slice(0, 2).join(' | '));
+
+// What the officer thinks of the application.
+await page.locator('textarea').first().fill('The station list should start with my own section instead of all 89.');
+await settle(400);
+await page.getByRole('button', { name: /Send to the office/i }).click();
+await settle(1500);
+check('a suggestion can be sent',
+  ((await page.locator('body').textContent()) ?? '').includes('Sent to the divisional office'));
+
+// And the same box at the end of an inspection, which is where it is really asked.
+await page.goto(`file://${FILE}#/inspections/1`);
+await settle(2000);
+const finish = page.getByRole('button', { name: /Complete inspection/i });
+if (await finish.count()) {
+  await finish.click();
+  await settle(1200);
+  const suggest = page.getByRole('button', { name: /Suggest an improvement/i });
+  check('finishing an inspection asks what would make it easier', (await suggest.count()) > 0);
+  if (await suggest.count()) {
+    await suggest.click();
+    await settle(600);
+    check('and the box opens in place',
+      ((await page.locator('body').textContent()) ?? '').includes('Which part of the app'));
+  }
+}
+
+heading('8. Nothing left the machine');
 await sampleToasts();
 check('no error toast was raised', errorToasts.length === 0, errorToasts.slice(0, 3).join(' | '));
 check('no page or console error', pageErrors.length === 0, pageErrors.slice(0, 3).join(' | '));

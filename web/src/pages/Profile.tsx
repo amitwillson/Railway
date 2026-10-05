@@ -4,7 +4,10 @@ import { useAuth } from '../state/AuthContext';
 import { useToast } from '../state/ToastContext';
 import Icon from '../components/Icon';
 import { Badge, Banner, Button, Card, Field, Loading } from '../components/ui';
+import JurisdictionPicker from '../components/JurisdictionPicker';
+import FeedbackBox, { MyFeedback } from '../components/FeedbackBox';
 import { formatDateTime, titleCase } from '../lib/format';
+import type { Feedback, FeedbackPayload } from '../api/types';
 
 interface SessionRow {
   id: string; issued_at: string; expires_at: string; last_seen_at: string | null;
@@ -20,9 +23,13 @@ export default function Profile() {
   const [confirm, setConfirm] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [feedback, setFeedback] = useState<Feedback[]>([]);
 
   const load = () => {
     api.get<{ data: SessionRow[] }>('/auth/sessions').then((r) => setSessions(r.data)).catch(() => setSessions([]));
+    api.get<FeedbackPayload>('/profile/feedback', { mine: true })
+      .then((r) => setFeedback(r.data))
+      .catch(() => setFeedback([]));
   };
 
   useEffect(load, []);
@@ -88,6 +95,23 @@ export default function Profile() {
 
       {user.must_change_password && (
         <Banner tone="warn">Your password was issued by the administrator. Please change it now.</Banner>
+      )}
+
+      {/* Where this officer works. Inspectors and supervisors choose their own;
+          nobody else has a jurisdiction to choose. */}
+      {(user.role === 'inspector' || user.role === 'supervisor') && <JurisdictionPicker />}
+
+      <FeedbackBox onSubmitted={(sent) => setFeedback((list) => [sent, ...list])} />
+
+      {feedback.length > 0 && (
+        <Card
+          title="What you have said"
+          subtitle="And what the office said back"
+          icon="clock"
+          pad={false}
+        >
+          <MyFeedback data={feedback} />
+        </Card>
       )}
 
       <Card title="Change password" icon="shield">
