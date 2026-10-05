@@ -1,0 +1,29 @@
+{
+  "name": "@railway-inspection/web",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Mobile-first PWA front end for the Railway Inspection & Compliance Management System",
+  "scripts": {
+    "dev": "npm run ensure:data && vite",
+    "build": "npm run ensure:data && tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "typecheck": "npm run ensure:data && tsc --noEmit",
+    "build:demo": "npm run ensure:data && DEMO=1 vite build",
+    "demo:data": "node scripts/make-demo-data.mjs",
+    "test": "npm run ensure:data && node --test tests/*.test.mjs",
+    "ensure:data": "node scripts/ensure-demo-data.mjs"
+  },
+  "dependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-router-dom": "^6.28.0"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.4",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.5"
+  }
+}

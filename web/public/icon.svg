@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="Railway inspection">
+  <rect width="64" height="64" rx="14" fill="#0b4f6c"/>
+  <g fill="none" stroke="#ffffff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+    <rect x="18" y="13" width="28" height="30" rx="7"/>
+    <path d="M18 28h28M25 36h.5M39 36h.5M22 43l-4 8M42 43l4 8"/>
+  </g>
+  <circle cx="45" cy="47" r="11" fill="#fab219"/>
+  <path d="M40.5 47.2l3.2 3.2 6-6.4" fill="none" stroke="#0b2e4f" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
